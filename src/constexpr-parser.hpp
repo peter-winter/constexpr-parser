@@ -5,6 +5,7 @@
 #include <iostream>
 
 using size = std::uint64_t;
+using size16 = std::uint16_t;
 
 template<size Max>
 using max_states = std::integral_constant<size, Max>;
@@ -36,7 +37,7 @@ constexpr Container& sort(Container& c, Pred p)
                 c[i] = c[i + 1];
                 c[i + 1] = x;
                 swap = true;
-            }            
+            }
         }
     }
     return c;
@@ -45,44 +46,36 @@ constexpr Container& sort(Container& c, Pred p)
 template<size MaxSize>
 struct cstream
 {
-    constexpr cstream& operator << (const char* source) 
-    { 
+    constexpr cstream& operator << (const char* source)
+    {
         const char* s = source;
         char* d = str + current_size;
         while (*s)
-        { 
-            *d++ = *s++; 
-            current_size++;
+        {
+            str[current_size++] = *s++;
         }
-        
-        return *this; 
+
+        return *this;
     }
-    
+
     constexpr cstream& operator << (size x)
     {
-        char* d = str + current_size;
         if (x == 0u)
         {
-            *d = '0';
-            current_size++;
+            str[current_size++] = '0';
             return *this;
         }
 
         char digits[std::numeric_limits<size>::digits10] = { 0 };
-        char* digit = digits;
+        int digit_count = 0;
         while (x)
         {
-            *digit++ = x % 10;
+            digits[digit_count++] = x % 10;
             x /= 10;
         }
-        digit = digits;
-        while (*digit != 0) digit++;
-        digit--;
-
-        while (digit >= digits)
+        for (int i = digit_count - 1; i >= 0; --i)
         {
-            *d++ = '0' + *digit--;
-            current_size++;
+            str[current_size++] = '0' + digits[i];
         }
         return *this;
     }
@@ -103,12 +96,12 @@ struct make_offsets<Reverse, std::index_sequence<I...>, Sum, First, Rest...>
     using type = std::conditional_t<
         Reverse,
         typename make_offsets<
-            Reverse,
-            std::index_sequence<Sum + First, I...>, Sum + First, Rest...
+        Reverse,
+        std::index_sequence<Sum + First, I...>, Sum + First, Rest...
         >::type,
         typename make_offsets<
-            Reverse,
-            std::index_sequence<I..., Sum>, Sum + First, Rest...
+        Reverse,
+        std::index_sequence<I..., Sum>, Sum + First, Rest...
         >::type
     >;
 };
@@ -142,7 +135,7 @@ struct no_value {};
 template<typename ValueType, typename EnumType>
 struct nterm
 {
-    constexpr nterm(EnumType e, const char* name):
+    constexpr nterm(EnumType e, const char* name) :
         e(e), name(name)
     {}
 
@@ -174,11 +167,11 @@ constexpr auto nterm<ValueType, NTermType>::operator()(Args... args) const
 template<typename ValueType, typename EnumType>
 struct term
 {
-    constexpr term(EnumType e, const char* data):
+    constexpr term(EnumType e, const char* data) :
         e(e), data(data), name(data)
     {}
 
-    constexpr term(EnumType e, const char* data, const char* name):
+    constexpr term(EnumType e, const char* data, const char* name) :
         e(e), data(data), name(name)
     {}
 
@@ -198,19 +191,20 @@ struct parser
     static const size nterm_count = NTermCount + 1;
     static const size root_idx = NTermCount;
     static const size rule_count = RuleCount + 1;
-    static const size situation_count = rule_count * RuleSize * term_count;
+    static const size situation_size = RuleSize + 1;
+    static const size situation_count = rule_count * situation_size * term_count;
     static const size root_rule_idx = RuleCount;
-    
-    using term_subset = bool[term_count];    
+
+    using term_subset = bool[term_count];
     using state = bool[situation_count];
-    
+
     struct symbol
     {
-        constexpr symbol():
+        constexpr symbol() :
             term(false), idx(-1)
         {}
 
-        constexpr symbol(bool term, size idx):
+        constexpr symbol(bool term, size idx) :
             term(term), idx(idx)
         {}
 
@@ -237,42 +231,50 @@ struct parser
         size r;
         size n;
     };
-    
+
+    enum class parse_table_entry_kind : size16 { next_state, reduce, error, success };
+
+    struct parse_table_entry
+    {
+        parse_table_entry_kind kind = { parse_table_entry_kind::error };
+        size16 value = size16(-1);
+    };
+
     template<
-        typename... TermValueType, typename TermEnumType, 
-        typename... NTermValueType, typename NTermEnumType, 
+        typename... TermValueType, typename TermEnumType,
+        typename... NTermValueType, typename NTermEnumType,
         typename RootValueType,
         typename... Rules,
         size Max
     >
-    constexpr parser(
-        std::integral_constant<size, Max>,
-        std::tuple<term<TermValueType, TermEnumType>...> terms, 
-        std::tuple<nterm<NTermValueType, NTermEnumType>...> nterms, 
-        nterm<RootValueType, NTermEnumType> root,
-        Rules... rules)
+        constexpr parser(
+            std::integral_constant<size, Max>,
+            std::tuple<term<TermValueType, TermEnumType>...> terms,
+            std::tuple<nterm<NTermValueType, NTermEnumType>...> nterms,
+            nterm<RootValueType, NTermEnumType> root,
+            std::tuple<Rules...> rules)
     {
         std::apply([this](auto... t) { (void(analyze_term(t)), ...); }, terms);
         analyze_term(eof<TermEnumType>);
         std::apply([this](auto... nt) { (void(analyze_nterm(nt)), ...); }, nterms);
-        analyze_nterm(fake_root<RootValueType, NTermEnumType>);        
-        analyze_rules(std::index_sequence_for<Rules...>{}, root, rules...);
+        analyze_nterm(fake_root<RootValueType, NTermEnumType>);
+        analyze_rules(std::index_sequence_for<Rules...>{}, root, rules);
         analyze_states();
-        dump_state(debug_str, 0);
-    }        
+        write_diag_str(diag_str);
+    }
 
     template<typename... Rules, size... I, typename RootValueType, typename NTermEnumType>
     constexpr void analyze_rules(
         std::index_sequence<I...>,
         nterm<RootValueType, NTermEnumType> root,
-        Rules... rules)
+        std::tuple<Rules...> rules)
     {
-        (void(analyze_rule<I>(rules, std::make_index_sequence<Rules::n>{})), ...);
+        (void(analyze_rule<I>(std::get<I>(rules), std::make_index_sequence<Rules::n>{})), ...);
         analyze_rule<root_rule_idx>(fake_root<RootValueType, NTermEnumType>(root), std::index_sequence<0>{});
         sort(rule_infos, [](const auto& l1, const auto& l2) { return l1.l < l2.l; });
         make_nterm_rule_slices();
     }
-    
+
     constexpr void make_nterm_rule_slices()
     {
         size nt = 0;
@@ -300,7 +302,7 @@ struct parser
     {
         nterm_names[static_cast<size>(nt.e)] = nt.name;
     }
-    
+
     template<typename ValueType, typename EnumType>
     constexpr auto make_symbol(term<ValueType, EnumType> t) const
     {
@@ -328,16 +330,16 @@ struct parser
 
     constexpr size make_situation_idx(situation_address a) const
     {
-        return rule_infos[a.rule_info_idx].r * RuleSize * term_count + a.after * term_count + a.t;
+        return a.rule_info_idx * situation_size * term_count + a.after * term_count + a.t;
     }
 
     constexpr situation_address make_situation_address(size idx) const
     {
         size t = idx % term_count;
         idx /= term_count;
-        size after = idx % RuleSize;
-        size rule_idx = idx / RuleSize;
-        return situation_address{ rule_idx, after, t};
+        size after = idx % situation_size;
+        size rule_info_idx = idx / situation_size;
+        return situation_address{ rule_info_idx, after, t };
     }
 
     constexpr void analyze_states()
@@ -346,14 +348,19 @@ struct parser
         size idx = make_situation_idx(root_situation_address);
         states[0][idx] = true;
         state_count = 1;
+        analyze_situation(0, idx);
+    }
 
-        situation_closure(0u, idx);
+    constexpr void analyze_situation(size state_idx, size idx)
+    {
+        situation_closure(state_idx, idx);
+        situation_transition(state_idx, idx);
     }
 
     constexpr void add_term_subset(term_subset& dest, const term_subset& source)
     {
         for (size i = 0u; i < term_count; ++i)
-            dest[i] = source[i];
+            dest[i] = dest[i] || source[i];
     }
 
     constexpr const term_subset& make_right_side_slice_first(const rule_info& ri, size start, term_subset& res)
@@ -452,16 +459,59 @@ struct parser
                 {
                     if (first[t])
                     {
-                        size new_s_idx = make_situation_idx(situation_address{ rule_infos[s.start + i].r, 0, t });
+                        size new_s_idx = make_situation_idx(situation_address{ s.start + i, 0, t });
                         if (!states[state_idx][new_s_idx])
                         {
                             states[state_idx][new_s_idx] = true;
-                            situation_closure(state_idx, new_s_idx);
+                            analyze_situation(state_idx, new_s_idx);
                         }
-                    }   
+                    }
                 }
             }
         }
+    }
+
+    constexpr void situation_transition(size state_idx, size idx)
+    {
+        situation_address addr = make_situation_address(idx);
+        const rule_info& ri = rule_infos[addr.rule_info_idx];
+        if (addr.after >= ri.n)
+        {
+            parse_table_entry_kind kind = (ri.r == root_rule_idx ? parse_table_entry_kind::success : parse_table_entry_kind::reduce);
+            parse_table[state_idx][nterm_count + addr.t] = parse_table_entry{ kind, size16(ri.r) };
+            return;
+        }
+
+        situation_address new_addr = situation_address{ addr.rule_info_idx, addr.after + 1, addr.t };
+        size new_idx = make_situation_idx(new_addr);
+        const symbol& s = right_sides[ri.r][addr.after];
+        size symbol_idx = s.term ? nterm_count + s.idx : s.idx;
+
+        if (parse_table[state_idx][symbol_idx].kind == parse_table_entry_kind::next_state)
+        {
+            size new_state_idx = parse_table[state_idx][symbol_idx].value;
+            states[new_state_idx][new_idx] = true;
+            analyze_situation(new_state_idx, new_idx);
+            return;
+        }
+
+        size new_state_idx = size(-1);
+        for (size i = 0; i < state_count; ++i)
+        {
+            if (states[i][new_idx])
+            {
+                new_state_idx = i;
+                break;
+            }
+        }
+        if (new_state_idx == size(-1))
+        {
+            new_state_idx = state_count;
+            ++state_count;
+        }
+        parse_table[state_idx][symbol_idx] = parse_table_entry{ parse_table_entry_kind::next_state, size16(new_state_idx) };
+        states[new_state_idx][new_idx] = true;
+        analyze_situation(new_state_idx, new_idx);
     }
 
     constexpr const char* get_symbol_name(const symbol& s) const
@@ -470,7 +520,7 @@ struct parser
     }
 
     template<typename Stream>
-    constexpr void dump_situation(Stream& s, size idx)
+    constexpr void write_situation_diag_str(Stream& s, size idx)
     {
         const situation_address addr = make_situation_address(idx);
         const rule_info& ri = rule_infos[addr.rule_info_idx];
@@ -488,7 +538,7 @@ struct parser
     }
 
     template<typename Stream>
-    constexpr void dump_state(Stream& s, size idx)
+    constexpr void write_state_diag_str(Stream& s, size idx)
     {
         s << "STATE " << idx << "\n";
 
@@ -496,51 +546,76 @@ struct parser
         {
             if (states[idx][i])
             {
-                dump_situation(s, i);
+                write_situation_diag_str(s, i);
                 s << "\n";
             }
+        }
+
+        s << "\n";
+
+        for (size i = 0; i < nterm_count; ++i)
+        {
+            if (parse_table[idx][i].kind == parse_table_entry_kind::next_state)
+                s << "On " << nterm_names[i] << " -> " << parse_table[idx][i].value << "\n";
+        }
+        for (size i = nterm_count; i < nterm_count + term_count; ++i)
+        {
+            if (parse_table[idx][i].kind == parse_table_entry_kind::next_state)
+                s << "On " << term_names[i - nterm_count] << " -> " << parse_table[idx][i].value << "\n";
         }
     }
 
     template<typename Stream>
-    constexpr void dump(Stream& s, size idx) const
+    constexpr void write_diag_str(Stream& s)
     {
-        s << debug_str.c_str();
+        for (size i = 0; i < state_count; ++i)
+        {
+            write_state_diag_str(s, i);
+            s << "\n";
+        }
+    }
+
+    template<typename Stream>
+    constexpr void output_diag_msg(Stream& s) const
+    {
+        s << diag_str.c_str();
     }
 
     const char* term_names[term_count] = { 0 };
-    const char* nterm_names[nterm_count] = { 0 };    
-    symbol right_sides[rule_count][RuleSize] = { };  
+    const char* nterm_names[nterm_count] = { 0 };
+    symbol right_sides[rule_count][RuleSize] = { };
     rule_info rule_infos[rule_count] = { 0 };
     slice nterm_rule_slices[nterm_count] = { 0 };
-    term_subset situation_first_after[situation_count] = { 0 };    
-    bool nterm_empty[nterm_count] = { 0 };    
+    term_subset situation_first_after[situation_count] = { 0 };
+    bool nterm_empty[nterm_count] = { 0 };
     term_subset nterm_first[nterm_count] = { 0 };
-    bool nterm_empty_analyzed[nterm_count] = { 0 };    
+    bool nterm_empty_analyzed[nterm_count] = { 0 };
     bool nterm_first_analyzed[nterm_count] = { 0 };
     state states[MaxStates] = { 0 };
+    parse_table_entry parse_table[MaxStates][term_count + nterm_count] = {};
     size state_count = 0;
-    cstream<10000> debug_str;
+    cstream<100000> diag_str;
 };
 
 template<
-    typename... TermValueType, typename TermEnumType, 
-    typename... NTermValueType, typename NTermEnumType, 
+    typename... TermValueType, typename TermEnumType,
+    typename... NTermValueType, typename NTermEnumType,
     typename RootValueType,
     typename... Rules,
-    size MaxStates>
+    size MaxStates
+>
 parser(
     std::integral_constant<size, MaxStates>,
-    std::tuple<term<TermValueType, TermEnumType>...>, 
-    std::tuple<nterm<NTermValueType, NTermEnumType>...>, 
+    std::tuple<term<TermValueType, TermEnumType>...>,
+    std::tuple<nterm<NTermValueType, NTermEnumType>...>,
     nterm<RootValueType, NTermEnumType>,
-    Rules...) -> 
+    std::tuple<Rules...>) ->
     parser<
-        static_cast<size>(TermEnumType::__size__), 
-        static_cast<size>(NTermEnumType::__size__), 
-        sizeof...(Rules), 
-        max_v<Rules::n...>,
-        MaxStates
+    static_cast<size>(TermEnumType::__size__),
+    static_cast<size>(NTermEnumType::__size__),
+    sizeof...(Rules),
+    max_v<Rules::n...>,
+    MaxStates
     >;
 
 template<typename... T>
@@ -555,3 +630,8 @@ constexpr auto make_nterms(NT... nts)
     return std::make_tuple(nts...);
 }
 
+template<typename... Rules>
+constexpr auto make_rules(Rules... rules)
+{
+    return std::make_tuple(rules...);
+}

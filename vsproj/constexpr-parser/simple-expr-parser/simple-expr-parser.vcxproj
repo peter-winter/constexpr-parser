@@ -85,7 +85,10 @@
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
-    <ClCompile Include="main.cpp" />
+    <ClCompile Include="main.cpp">
+      <AdditionalOptions Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">/constexpr:depth4096 /constexpr:steps10000000 %(AdditionalOptions)</AdditionalOptions>
+      <AdditionalOptions Condition="'$(Configuration)|$(Platform)'=='Release|x64'">/constexpr:depth4096 /constexpr:steps10000000 %(AdditionalOptions)</AdditionalOptions>
+    </ClCompile>
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
