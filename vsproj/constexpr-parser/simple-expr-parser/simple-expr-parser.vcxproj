@@ -12,8 +12,8 @@
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="..\..\..\examples\simple-expr-parser\main.cpp">
-      <AdditionalOptions Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">/constexpr:depth4096 /constexpr:steps10000000 %(AdditionalOptions)</AdditionalOptions>
-      <AdditionalOptions Condition="'$(Configuration)|$(Platform)'=='Release|x64'">/constexpr:depth4096 /constexpr:steps10000000 %(AdditionalOptions)</AdditionalOptions>
+      <AdditionalOptions Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">/constexpr:steps10000000 %(AdditionalOptions)</AdditionalOptions>
+      <AdditionalOptions Condition="'$(Configuration)|$(Platform)'=='Release|x64'">/constexpr:steps10000000 %(AdditionalOptions)</AdditionalOptions>
     </ClCompile>
   </ItemGroup>
   <PropertyGroup Label="Globals">
