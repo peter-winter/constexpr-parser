@@ -246,6 +246,12 @@ struct parser
         size n;
     };
 
+    struct situation_queue_entry
+    {
+        size state_idx;
+        size idx;
+    };
+
     enum class parse_table_entry_kind : size16 { next_state, reduce, error, success };
 
     struct parse_table_entry
@@ -368,21 +374,6 @@ struct parser
         return situation_address{ rule_info_idx, after, t };
     }
 
-    constexpr void analyze_states()
-    {
-        situation_address root_situation_address{ root_rule_idx, 0, eof_idx };
-        size idx = make_situation_idx(root_situation_address);
-        states[0][idx] = true;
-        state_count = 1;
-        analyze_situation(0, idx);
-    }
-
-    constexpr void analyze_situation(size state_idx, size idx)
-    {
-        situation_closure(state_idx, idx);
-        situation_transition(state_idx, idx);
-    }
-
     constexpr void add_term_subset(term_subset& dest, const term_subset& source)
     {
         for (size i = 0u; i < term_count; ++i)
@@ -466,6 +457,37 @@ struct parser
         return situation_first_after[idx];
     }
 
+    constexpr void analyze_states()
+    {
+        situation_address root_situation_address{ root_rule_idx, 0, eof_idx };
+        size idx = make_situation_idx(root_situation_address);
+        state_count = 1;
+        add_situation_to_state(0, idx);
+
+        size n = 0;
+        while (n != situation_queue_size)
+        {
+            analyze_situation(situation_queue[n].state_idx, situation_queue[n].idx);
+            n++;
+        }
+    }
+
+    constexpr void analyze_situation(size state_idx, size idx)
+    {
+        situation_closure(state_idx, idx);
+        situation_transition(state_idx, idx);
+    }
+
+    constexpr void add_situation_to_state(size state_idx, size idx)
+    {
+        bool& b = states[state_idx][idx];
+        if (!b)
+        {
+            b = true;
+            situation_queue[situation_queue_size++] = { state_idx, idx };
+        }
+    }
+
     constexpr void situation_closure(size state_idx, size idx)
     {
         situation_address addr = make_situation_address(idx);
@@ -486,11 +508,7 @@ struct parser
                     if (first[t])
                     {
                         size new_s_idx = make_situation_idx(situation_address{ s.start + i, 0, t });
-                        if (!states[state_idx][new_s_idx])
-                        {
-                            states[state_idx][new_s_idx] = true;
-                            analyze_situation(state_idx, new_s_idx);
-                        }
+                        add_situation_to_state(state_idx, new_s_idx);
                     }
                 }
             }
@@ -516,8 +534,7 @@ struct parser
         if (parse_table[state_idx][symbol_idx].kind == parse_table_entry_kind::next_state)
         {
             size new_state_idx = parse_table[state_idx][symbol_idx].value;
-            states[new_state_idx][new_idx] = true;
-            analyze_situation(new_state_idx, new_idx);
+            add_situation_to_state(new_state_idx, new_idx);
             return;
         }
 
@@ -536,8 +553,7 @@ struct parser
             ++state_count;
         }
         parse_table[state_idx][symbol_idx] = parse_table_entry{ parse_table_entry_kind::next_state, size16(new_state_idx) };
-        states[new_state_idx][new_idx] = true;
-        analyze_situation(new_state_idx, new_idx);
+        add_situation_to_state(new_state_idx, new_idx);
     }
 
     constexpr const char* get_symbol_name(const symbol& s) const
@@ -620,7 +636,10 @@ struct parser
     state states[MaxStates] = { 0 };
     parse_table_entry parse_table[MaxStates][term_count + nterm_count] = {};
     size state_count = 0;
-    cstream<100000> diag_str;
+    situation_queue_entry situation_queue[MaxStates * situation_count] = { 0 };
+    size situation_queue_size = 0;
+
+    cstream<1 << 20> diag_str;
 };
 
 template<
@@ -635,7 +654,8 @@ parser(
     std::tuple<term<TermValueType, TermEnumType>...>,
     std::tuple<nterm<NTermValueType, NTermEnumType>...>,
     nterm<RootValueType, NTermEnumType>,
-    std::tuple<Rules...>) ->
+    std::tuple<Rules...>
+) -> 
 parser<
     sizeof...(TermValueType),
     sizeof...(NTermValueType),
