@@ -7,8 +7,11 @@
 using size = std::uint64_t;
 using size16 = std::uint16_t;
 
-template<size Max>
-using max_states = std::integral_constant<size, Max>;
+template<size S>
+using max_states = std::integral_constant<size, S>;
+
+template<size S>
+using diag_message_size = std::integral_constant<size, S>;
 
 using char_2 = char[2];
 constexpr size char_strings_size = std::numeric_limits<char>::max();
@@ -42,6 +45,9 @@ constexpr Container& sort(Container& c, Pred p)
     }
     return c;
 }
+
+struct no_diag_str
+{};
 
 template<size MaxSize>
 struct cstream
@@ -84,6 +90,18 @@ struct cstream
 
     char str[MaxSize] = { 0 };
     size current_size = 0;
+};
+
+template<typename T>
+struct is_cstream
+{
+    static const bool value = false;
+};
+
+template<size S>
+struct is_cstream<cstream<S>>
+{
+    static const bool value = true;
 };
 
 template<bool Reverse, typename Seq, std::size_t Sum, size... X>
@@ -132,27 +150,34 @@ constexpr size max_v = max<X...>::value;
 
 struct no_value {};
 
-template<typename ValueType, typename EnumType>
+template<typename ValueType>
 struct nterm
 {
-    constexpr nterm(EnumType e, const char* name) :
-        idx(static_cast<size>(e)), name(name)
+    constexpr nterm(const char* name):
+        name(name)
     {}
+
+    constexpr void set_idx(size idx)
+    {
+        this->idx = idx;
+    }
+
+    constexpr const char* get_name() const { return name; }
 
     template<typename... Args>
     constexpr auto operator()(Args... args) const;
 
-    size idx;
+    size idx = (size)-1;
     const char* name;
 };
 
-template<typename ValueType, size Idx>
+template<typename ValueType>
 struct fake_root
 {
     template<typename... Args>
     constexpr auto operator()(Args... args) const;
 
-    size idx = Idx;
+    constexpr static const char* get_name() { return "##"; };
 };
 
 template<typename L, typename...R>
@@ -163,47 +188,55 @@ struct rule
     static const size n = sizeof...(R);
 };
 
-template<typename ValueType, typename NTermType>
+template<typename ValueType>
 template<typename... Args>
-constexpr auto nterm<ValueType, NTermType>::operator()(Args... args) const
+constexpr auto nterm<ValueType>::operator()(Args... args) const
 {
-    return rule<nterm<ValueType, NTermType>, Args...>{*this, std::make_tuple(args...)};
+    return rule<nterm<ValueType>, Args...>{*this, std::make_tuple(args...)};
 }
 
-template<typename ValueType, size Idx>
+template<typename ValueType>
 template<typename... Args>
-constexpr auto fake_root<ValueType, Idx>::operator()(Args... args) const
+constexpr auto fake_root<ValueType>::operator()(Args... args) const
 {
-    return rule<fake_root<ValueType, Idx>, Args...>{*this, std::make_tuple(args...)};
+    return rule<fake_root<ValueType>, Args...>{*this, std::make_tuple(args...)};
 }
 
-template<typename ValueType, typename EnumType>
+template<typename ValueType = no_value>
 struct term
 {
-    constexpr term(EnumType e, const char* data) :
-        idx(static_cast<size>(e)), data(data), name(data)
+    constexpr term(const char* data):
+        data(data), name(data)
     {}
 
-    constexpr term(EnumType e, const char* data, const char* name) :
-        idx(static_cast<size>(e)), data(data), name(name)
+    constexpr term(const char* data, const char* name):
+        data(data), name(name)
     {}
 
-    size idx;
+    constexpr void set_idx(size idx)
+    {
+        this->idx = idx;
+    }
+
+    constexpr const char* get_name() const { return name; }
+
+    size idx = -1;
     const char* data;
     const char* name;
 };
 
-template<size Idx>
 struct eof
-{};
+{
+    constexpr static const char* get_name() { return "$$"; }
+};
 
-template<size TermCount, size NTermCount, size RuleCount, size RuleSize, size MaxStates>
+template<size TermCount, size NTermCount, size RuleCount, size RuleSize, size MaxStates, typename DiagStr>
 struct parser
 {
     static const size term_count = TermCount + 1;
     static const size eof_idx = TermCount;
     static const size nterm_count = NTermCount + 1;
-    static const size root_idx = NTermCount;
+    static const size fake_root_idx = NTermCount;
     static const size rule_count = RuleCount + 1;
     static const size situation_size = RuleSize + 1;
     static const size situation_count = rule_count * situation_size * term_count;
@@ -260,39 +293,42 @@ struct parser
         size16 value = size16(-1);
     };
 
-    template<
-        typename... TermValueType, typename TermEnumType,
-        typename... NTermValueType, typename NTermEnumType,
-        typename RootValueType,
-        typename... Rules,
-        size Max
-    >
-        constexpr parser(
-            std::integral_constant<size, Max>,
-            std::tuple<term<TermValueType, TermEnumType>...> terms,
-            std::tuple<nterm<NTermValueType, NTermEnumType>...> nterms,
-            nterm<RootValueType, NTermEnumType> root,
-            std::tuple<Rules...> rules)
+    template<typename... TermValueType, typename... NTermValueType, typename RootValueType, typename... Rules, size MaxStates1, size DiagStrSize1>
+    constexpr parser(
+        std::tuple<term<TermValueType>...> terms,
+        std::tuple<nterm<NTermValueType>...> nterms,
+        nterm<RootValueType> root,
+        std::tuple<Rules...> rules,
+        std::integral_constant<size, MaxStates1> max_states,
+        std::integral_constant<size, DiagStrSize1> diag_str_size):
+        parser(terms, nterms, root, rules)
     {
-        std::apply([this](auto... t) { (void(analyze_term(t)), ...); }, terms);
-        analyze_term(eof<eof_idx>{});
-        std::apply([this](auto... nt) { (void(analyze_nterm(nt)), ...); }, nterms);
-        analyze_nterm(fake_root<RootValueType, root_idx>{});
-        analyze_rules(std::index_sequence_for<Rules...>{}, root, rules);
-        analyze_states();
         write_diag_str(diag_str);
     }
 
-    template<typename... Rules, size... I, typename RootValueType, typename NTermEnumType>
-    constexpr void analyze_rules(
-        std::index_sequence<I...>,
-        nterm<RootValueType, NTermEnumType> root,
+    template<typename... TermValueType, typename... NTermValueType, typename RootValueType, typename... Rules, size MaxStates1>
+    constexpr parser(
+        std::tuple<term<TermValueType>...> terms,
+        std::tuple<nterm<NTermValueType>...> nterms,
+        nterm<RootValueType> root,
+        std::tuple<Rules...> rules,
+        std::integral_constant<size, MaxStates1> max_states):
+        parser(terms, nterms, root, rules)
+    {}
+
+    template<typename... TermValueType, typename... NTermValueType, typename RootValueType, typename... Rules>
+    constexpr parser(
+        std::tuple<term<TermValueType>...> terms,
+        std::tuple<nterm<NTermValueType>...> nterms,
+        nterm<RootValueType> root,
         std::tuple<Rules...> rules)
     {
-        (void(analyze_rule<I>(std::get<I>(rules), std::make_index_sequence<Rules::n>{})), ...);
-        analyze_rule<root_rule_idx>(fake_root<RootValueType, root_idx>{}(root), std::index_sequence<0>{});
-        sort(rule_infos, [](const auto& l1, const auto& l2) { return l1.l < l2.l; });
-        make_nterm_rule_slices();
+        std::apply([this](auto... t) { (void(analyze_term(t)), ...); }, terms);
+        analyze_term(eof{});
+        std::apply([this](auto... nt) { (void(analyze_nterm(nt)), ...); }, nterms);
+        analyze_nterm(fake_root<RootValueType>{});
+        analyze_rules(std::index_sequence_for<Rules...>{}, root, rules);
+        analyze_states();
     }
 
     constexpr void make_nterm_rule_slices()
@@ -311,40 +347,39 @@ struct parser
         }
     }
 
-    template<size Idx>
-    constexpr void analyze_term(eof<Idx>)
+    constexpr void analyze_term(eof)
     {
-        term_names[Idx] = "$$";
+        term_names[eof_idx] = eof::get_name();
     }
 
-    template<typename ValueType, typename EnumType>
-    constexpr void analyze_term(term<ValueType, EnumType> t)
+    template<typename ValueType>
+    constexpr void analyze_term(term<ValueType> t)
     {
         term_names[t.idx] = t.name;
     }
 
-    template<typename ValueType, typename EnumType>
-    constexpr void analyze_nterm(nterm<ValueType, EnumType> nt)
+    template<typename ValueType>
+    constexpr void analyze_nterm(nterm<ValueType> nt)
     {
         nterm_names[nt.idx] = nt.name;
     }
 
-    template<typename ValueType, size Idx>
-    constexpr void analyze_nterm(fake_root<ValueType, Idx> nt)
+    template<typename ValueType>
+    constexpr void analyze_nterm(fake_root<ValueType>)
     {
-        nterm_names[Idx] = "##";
+        nterm_names[fake_root_idx] = fake_root<ValueType>::get_name();
     }
 
-    template<typename ValueType, typename EnumType>
-    constexpr auto make_symbol(term<ValueType, EnumType> t) const
+    template<typename ValueType>
+    constexpr auto make_symbol(term<ValueType> t) const
     {
-        return symbol{ true, t.idx };
+        return symbol{ true, find(term_names, t.name) };
     }
 
-    template<typename ValueType, typename EnumType>
-    constexpr auto make_symbol(nterm<ValueType, EnumType> nt) const
+    template<typename ValueType>
+    constexpr auto make_symbol(nterm<ValueType> nt) const
     {
-        return symbol{ false, nt.idx };
+        return symbol{ false, find(nterm_names, nt.name) };
     }
 
     constexpr auto make_symbol(const char* name) const
@@ -352,10 +387,22 @@ struct parser
         return symbol{ true, find(term_names, name) };
     }
 
+    template<typename... Rules, size... I, typename RootValueType>
+    constexpr void analyze_rules(
+        std::index_sequence<I...>,
+        nterm<RootValueType> root,
+        std::tuple<Rules...> rules)
+    {
+        (void(analyze_rule<I>(std::get<I>(rules), std::make_index_sequence<Rules::n>{})), ...);
+        analyze_rule<root_rule_idx>(fake_root<RootValueType>{}(root), std::index_sequence<0>{});
+        sort(rule_infos, [](const auto& l1, const auto& l2) { return l1.l < l2.l; });
+        make_nterm_rule_slices();
+    }
+
     template<size Nr, typename L, typename... R, size... I>
     constexpr void analyze_rule(rule<L, R...> r, std::index_sequence<I...>)
     {
-        size l_idx = static_cast<size>(r.l.idx);
+        size l_idx = find(nterm_names, r.l.get_name());
         (void(right_sides[Nr][I] = make_symbol(std::get<I>(r.r))), ...);
         rule_infos[Nr] = { l_idx, Nr, sizeof...(R) };
     }
@@ -562,7 +609,7 @@ struct parser
     }
 
     template<typename Stream>
-    constexpr void write_situation_diag_str(Stream& s, size idx)
+    constexpr void write_situation_diag_str(Stream& s, size idx) const
     {
         const situation_address addr = make_situation_address(idx);
         const rule_info& ri = rule_infos[addr.rule_info_idx];
@@ -580,7 +627,7 @@ struct parser
     }
 
     template<typename Stream>
-    constexpr void write_state_diag_str(Stream& s, size idx)
+    constexpr void write_state_diag_str(Stream& s, size idx) const
     {
         s << "STATE " << idx << "\n";
 
@@ -608,7 +655,7 @@ struct parser
     }
 
     template<typename Stream>
-    constexpr void write_diag_str(Stream& s)
+    constexpr void write_diag_str(Stream& s) const
     {
         for (size i = 0; i < state_count; ++i)
         {
@@ -617,10 +664,15 @@ struct parser
         }
     }
 
+    constexpr const char* get_diag_msg() const
+    {
+        return diag_str.c_str();
+    }
+
     template<typename Stream>
     constexpr void output_diag_msg(Stream& s) const
     {
-        s << diag_str.c_str();
+        write_diag_str(s);
     }
 
     const char* term_names[term_count] = { 0 };
@@ -638,42 +690,64 @@ struct parser
     size state_count = 0;
     situation_queue_entry situation_queue[MaxStates * situation_count] = { 0 };
     size situation_queue_size = 0;
-
-    cstream<1 << 20> diag_str;
+    DiagStr diag_str;
 };
 
 template<
-    typename... TermValueType, typename TermEnumType,
-    typename... NTermValueType, typename NTermEnumType,
-    typename RootValueType,
-    typename... Rules,
+    typename... TermValueType, typename... NTermValueType, typename RootValueType, typename... Rules, 
+    size MaxStates, size DiagStrSize
+>
+parser(
+    std::tuple<term<TermValueType>...>,
+    std::tuple<nterm<NTermValueType>...>,
+    nterm<RootValueType>,
+    std::tuple<Rules...>,
+    std::integral_constant<size, MaxStates>,
+    std::integral_constant<size, DiagStrSize>
+) -> 
+parser<sizeof...(TermValueType), sizeof...(NTermValueType), sizeof...(Rules), max_v<Rules::n...>, MaxStates, cstream<DiagStrSize>>;
+
+template<
+    typename... TermValueType, typename... NTermValueType, typename RootValueType, typename... Rules,
     size MaxStates
 >
 parser(
-    std::integral_constant<size, MaxStates>,
-    std::tuple<term<TermValueType, TermEnumType>...>,
-    std::tuple<nterm<NTermValueType, NTermEnumType>...>,
-    nterm<RootValueType, NTermEnumType>,
-    std::tuple<Rules...>
-) -> 
-parser<
-    sizeof...(TermValueType),
-    sizeof...(NTermValueType),
-    sizeof...(Rules),
-    max_v<Rules::n...>,
-    MaxStates
->;
+    std::tuple<term<TermValueType>...>,
+    std::tuple<nterm<NTermValueType>...>,
+    nterm<RootValueType>,
+    std::tuple<Rules...>,
+    std::integral_constant<size, MaxStates>
+) ->
+parser<sizeof...(TermValueType), sizeof...(NTermValueType), sizeof...(Rules), max_v<Rules::n...>, MaxStates, no_diag_str>;
+
+template<typename... S, size... I>
+constexpr auto make_symbols_impl(std::index_sequence<I...>, S... s)
+{
+    (void(s.set_idx(I)), ...);
+    return std::make_tuple(s...);
+}
+
+constexpr auto deduce_term(const char* data)
+{
+    return term<no_value>(data);
+}
+
+template<typename ValueType>
+constexpr auto deduce_term(term<ValueType> t)
+{
+    return t;
+}
 
 template<typename... T>
 constexpr auto make_terms(T... ts)
 {
-    return std::make_tuple(ts...);
+    return make_symbols_impl(std::index_sequence_for<T...>{}, deduce_term(ts)...);
 }
 
 template<typename... NT>
 constexpr auto make_nterms(NT... nts)
 {
-    return std::make_tuple(nts...);
+    return make_symbols_impl(std::index_sequence_for<NT...>{}, nts...);
 }
 
 template<typename... Rules>

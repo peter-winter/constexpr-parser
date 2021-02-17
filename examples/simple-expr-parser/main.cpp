@@ -1,27 +1,14 @@
 #include "constexpr-parser.hpp"
 #include <iostream>
 
-enum class terms { o_plus, o_minus, o_mul, o_div, o_xor, o_and, o_or, o_not, lpar, rpar, one, two };
-enum class nterms { expr };
 
-constexpr nterm<int, nterms> expr(nterms::expr, "expr");
+constexpr nterm<int> expr("expr");
 
-constexpr term<int, terms> one(terms::one, "1");
-constexpr term<int, terms> two(terms::two, "2");
-constexpr term<no_value, terms> o_plus(terms::o_plus, "+");
-constexpr term<no_value, terms> o_minus(terms::o_minus, "-");
-constexpr term<no_value, terms> o_mul(terms::o_mul, "*");
-constexpr term<no_value, terms> o_div(terms::o_div, "/");
-constexpr term<no_value, terms> o_xor(terms::o_xor, "^");
-constexpr term<no_value, terms> o_and(terms::o_and, "&");
-constexpr term<no_value, terms> o_or(terms::o_or, "|");
-constexpr term<no_value, terms> o_not(terms::o_not, "!");
-constexpr term<no_value, terms> lpar(terms::lpar, "(");
-constexpr term<no_value, terms> rpar(terms::rpar, ")");
+constexpr term<int> one("1");
+constexpr term<int> two("1");
 
 constexpr parser p(
-    max_states<1000>{},
-    make_terms(one, two, o_plus, o_minus, o_mul, o_div, o_xor, o_and, o_or, o_not, lpar, rpar),
+    make_terms("1", "2", "+", "-", "*", "/", "^", "&", "|", "!", "(", ")"),
     make_nterms(expr),
     expr,
     make_rules(
@@ -32,17 +19,21 @@ constexpr parser p(
         expr(expr, "^", expr),
         expr(expr, "&", expr),
         expr(expr, "|", expr),
-        expr("!", expr),
         expr("-", expr),
+        expr("!", expr),
         expr("(", expr, ")"),
         expr("1"),
         expr("2")
-    )
+    ),
+    max_states<100>{},
+    diag_message_size<100000>{}
 );
+
+constexpr const char* msg = p.get_diag_msg();
 
 int main()
 {
-    p.output_diag_msg(std::cout);
+    std::cout << msg;
     return 0;
 }
 
