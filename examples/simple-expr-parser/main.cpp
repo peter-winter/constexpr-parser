@@ -1,7 +1,8 @@
 #include "constexpr-parser.hpp"
+#include <iostream>
 
-enum class terms { o_plus, o_minus, o_mul, o_div, o_xor, o_and, o_or, o_not, lpar, rpar, one, two, __size__ };
-enum class nterms { expr, __size__ };
+enum class terms { o_plus, o_minus, o_mul, o_div, o_xor, o_and, o_or, o_not, lpar, rpar, one, two };
+enum class nterms { expr };
 
 constexpr nterm<int, nterms> expr(nterms::expr, "expr");
 
@@ -17,7 +18,6 @@ constexpr term<no_value, terms> o_or(terms::o_or, "|");
 constexpr term<no_value, terms> o_not(terms::o_not, "!");
 constexpr term<no_value, terms> lpar(terms::lpar, "(");
 constexpr term<no_value, terms> rpar(terms::rpar, ")");
-
 
 constexpr parser p(
     max_states<1000>{},
@@ -41,7 +41,7 @@ constexpr parser p(
 );
 
 int main()
-{   
+{
     p.output_diag_msg(std::cout);
     return 0;
 }

@@ -1,8 +1,8 @@
 #include <utility>
+#include <cstdint>
 #include <limits>
 #include <tuple>
 #include <algorithm>
-#include <iostream>
 
 using size = std::uint64_t;
 using size16 = std::uint16_t;
@@ -136,23 +136,29 @@ template<typename ValueType, typename EnumType>
 struct nterm
 {
     constexpr nterm(EnumType e, const char* name) :
-        e(e), name(name)
+        idx(static_cast<size>(e)), name(name)
     {}
 
     template<typename... Args>
     constexpr auto operator()(Args... args) const;
 
-    EnumType e;
+    size idx;
     const char* name;
 };
 
-template<typename ValueType, typename EnumType>
-constexpr nterm<ValueType, EnumType> fake_root(EnumType::__size__, "##");
+template<typename ValueType, size Idx>
+struct fake_root
+{
+    template<typename... Args>
+    constexpr auto operator()(Args... args) const;
 
-template<typename ValueType, typename EnumType, typename...R>
+    size idx = Idx;
+};
+
+template<typename L, typename...R>
 struct rule
 {
-    nterm<ValueType, EnumType> l;
+    L l;
     std::tuple<R...> r;
     static const size n = sizeof...(R);
 };
@@ -161,27 +167,35 @@ template<typename ValueType, typename NTermType>
 template<typename... Args>
 constexpr auto nterm<ValueType, NTermType>::operator()(Args... args) const
 {
-    return rule<ValueType, NTermType, Args...>{*this, std::make_tuple(args...)};
+    return rule<nterm<ValueType, NTermType>, Args...>{*this, std::make_tuple(args...)};
+}
+
+template<typename ValueType, size Idx>
+template<typename... Args>
+constexpr auto fake_root<ValueType, Idx>::operator()(Args... args) const
+{
+    return rule<fake_root<ValueType, Idx>, Args...>{*this, std::make_tuple(args...)};
 }
 
 template<typename ValueType, typename EnumType>
 struct term
 {
     constexpr term(EnumType e, const char* data) :
-        e(e), data(data), name(data)
+        idx(static_cast<size>(e)), data(data), name(data)
     {}
 
     constexpr term(EnumType e, const char* data, const char* name) :
-        e(e), data(data), name(name)
+        idx(static_cast<size>(e)), data(data), name(name)
     {}
 
-    EnumType e;
+    size idx;
     const char* data;
     const char* name;
 };
 
-template<typename EnumType>
-constexpr term<no_value, EnumType> eof(EnumType::__size__, "$$");
+template<size Idx>
+struct eof
+{};
 
 template<size TermCount, size NTermCount, size RuleCount, size RuleSize, size MaxStates>
 struct parser
@@ -255,9 +269,9 @@ struct parser
             std::tuple<Rules...> rules)
     {
         std::apply([this](auto... t) { (void(analyze_term(t)), ...); }, terms);
-        analyze_term(eof<TermEnumType>);
+        analyze_term(eof<eof_idx>{});
         std::apply([this](auto... nt) { (void(analyze_nterm(nt)), ...); }, nterms);
-        analyze_nterm(fake_root<RootValueType, NTermEnumType>);
+        analyze_nterm(fake_root<RootValueType, root_idx>{});
         analyze_rules(std::index_sequence_for<Rules...>{}, root, rules);
         analyze_states();
         write_diag_str(diag_str);
@@ -270,7 +284,7 @@ struct parser
         std::tuple<Rules...> rules)
     {
         (void(analyze_rule<I>(std::get<I>(rules), std::make_index_sequence<Rules::n>{})), ...);
-        analyze_rule<root_rule_idx>(fake_root<RootValueType, NTermEnumType>(root), std::index_sequence<0>{});
+        analyze_rule<root_rule_idx>(fake_root<RootValueType, root_idx>{}(root), std::index_sequence<0>{});
         sort(rule_infos, [](const auto& l1, const auto& l2) { return l1.l < l2.l; });
         make_nterm_rule_slices();
     }
@@ -291,28 +305,40 @@ struct parser
         }
     }
 
+    template<size Idx>
+    constexpr void analyze_term(eof<Idx>)
+    {
+        term_names[Idx] = "$$";
+    }
+
     template<typename ValueType, typename EnumType>
     constexpr void analyze_term(term<ValueType, EnumType> t)
     {
-        term_names[static_cast<size>(t.e)] = t.name;
+        term_names[t.idx] = t.name;
     }
 
     template<typename ValueType, typename EnumType>
     constexpr void analyze_nterm(nterm<ValueType, EnumType> nt)
     {
-        nterm_names[static_cast<size>(nt.e)] = nt.name;
+        nterm_names[nt.idx] = nt.name;
+    }
+
+    template<typename ValueType, size Idx>
+    constexpr void analyze_nterm(fake_root<ValueType, Idx> nt)
+    {
+        nterm_names[Idx] = "##";
     }
 
     template<typename ValueType, typename EnumType>
     constexpr auto make_symbol(term<ValueType, EnumType> t) const
     {
-        return symbol{ true, static_cast<size>(t.e) };
+        return symbol{ true, t.idx };
     }
 
     template<typename ValueType, typename EnumType>
     constexpr auto make_symbol(nterm<ValueType, EnumType> nt) const
     {
-        return symbol{ false, static_cast<size>(nt.e) };
+        return symbol{ false, nt.idx };
     }
 
     constexpr auto make_symbol(const char* name) const
@@ -320,10 +346,10 @@ struct parser
         return symbol{ true, find(term_names, name) };
     }
 
-    template<size Nr, typename ValueType, typename EnumType, typename... R, size... I>
-    constexpr void analyze_rule(rule<ValueType, EnumType, R...> r, std::index_sequence<I...>)
+    template<size Nr, typename L, typename... R, size... I>
+    constexpr void analyze_rule(rule<L, R...> r, std::index_sequence<I...>)
     {
-        size l_idx = static_cast<size>(r.l.e);
+        size l_idx = static_cast<size>(r.l.idx);
         (void(right_sides[Nr][I] = make_symbol(std::get<I>(r.r))), ...);
         rule_infos[Nr] = { l_idx, Nr, sizeof...(R) };
     }
@@ -610,13 +636,13 @@ parser(
     std::tuple<nterm<NTermValueType, NTermEnumType>...>,
     nterm<RootValueType, NTermEnumType>,
     std::tuple<Rules...>) ->
-    parser<
-    static_cast<size>(TermEnumType::__size__),
-    static_cast<size>(NTermEnumType::__size__),
+parser<
+    sizeof...(TermValueType),
+    sizeof...(NTermValueType),
     sizeof...(Rules),
     max_v<Rules::n...>,
     MaxStates
-    >;
+>;
 
 template<typename... T>
 constexpr auto make_terms(T... ts)
