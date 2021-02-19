@@ -213,23 +213,41 @@ constexpr auto fake_root<ValueType>::operator()(Args... args) const
     return rule<fake_root<ValueType>, Args...>{*this, std::make_tuple(args...)};
 }
 
+enum class associativity { ltor, rtol };
+
 template<typename ValueType = no_value>
 struct term
 {
     constexpr term(const char* data):
-        data(data), name(data), precedence(0)
+        data(data), precedence(0), ass(associativity::ltor), name(data)
+    {}
+
+    constexpr term(const char* data, associativity a):
+        data(data), precedence(0), ass(a), name(data)
     {}
 
     constexpr term(const char* data, size precedence):
-        data(data), name(data), precedence(precedence)
+        data(data), precedence(precedence), ass(associativity::ltor), name(data)
+    {}
+
+    constexpr term(const char* data, size precedence, associativity a):
+        data(data), precedence(precedence), ass(a), name(data)
     {}
 
     constexpr term(const char* data, const char* name):
-        data(data), name(name), precedence(0)
+        data(data), precedence(0), ass(associativity::ltor), name(name)
+    {}
+
+    constexpr term(const char* data, associativity a, const char* name):
+        data(data), precedence(0), ass(a), name(name)
     {}
 
     constexpr term(const char* data, size precedence, const char* name):
-        data(data), name(name), precedence(precedence)
+        data(data), precedence(precedence), ass(associativity::ltor), name(name)
+    {}
+
+    constexpr term(const char* data, size precedence, associativity a, const char* name):
+        data(data), precedence(precedence), ass(a), name(name)
     {}
 
     constexpr void set_idx(size idx)
@@ -242,6 +260,7 @@ struct term
     size idx = uninitialized;
     const char* data;
     size precedence;
+    associativity ass;
     const char* name;
 };
 
@@ -434,10 +453,20 @@ struct parser
         make_nterm_rule_slices();
     }
 
-    template<typename L, typename... R, size... I>
-    constexpr size get_rule_precedence(rule<L, R...> r, std::index_sequence<I...>)
+    constexpr size calculate_rule_precedence(size precedence, size rule_idx, size rule_size) const
     {
-        return r.precedence;
+        if (precedence != 0)
+            return precedence;
+        for (int i = int(rule_size - 1); i >= 0; --i)
+        {
+            const auto& s = right_sides[rule_idx][i];
+            if (!s.term)
+                continue;
+            size p = term_precedence_table[s.idx];
+            if (p != 0)
+                return p;
+        }
+        return 0;
     }
 
     template<size Nr, typename L, typename... R, size... I>
@@ -445,8 +474,9 @@ struct parser
     {
         size l_idx = find(nterm_names, r.l.get_name());
         (void(right_sides[Nr][I] = make_symbol(std::get<I>(r.r))), ...);
-        rule_infos[Nr] = { l_idx, Nr, sizeof...(R) };
-        rule_precedence_table[Nr] = get_rule_precedence(r, std::index_sequence<I...>{});
+        constexpr size rule_size = sizeof...(R);
+        rule_infos[Nr] = { l_idx, Nr, rule_size };
+        rule_precedence_table[Nr] = calculate_rule_precedence(r.precedence, Nr, rule_size);
     }
 
     constexpr size make_situation_idx(situation_address a) const
@@ -618,7 +648,8 @@ struct parser
         const rule_info& ri = rule_infos[addr.rule_info_idx];
         bool reduction = addr.after >= ri.n;
 
-        size symbol_idx = reduction ? get_parse_table_idx(true, addr.t) : right_sides[ri.r][addr.after].get_parse_table_idx();
+        const auto& s = right_sides[ri.r][addr.after];
+        size symbol_idx = reduction ? get_parse_table_idx(true, addr.t) : s.get_parse_table_idx();
         auto& entry = parse_table[state_idx][symbol_idx];
         if (reduction)
         {
@@ -668,7 +699,7 @@ struct parser
         
         if (entry.has_reduce())
         {
-            entry.kind = solve_conflict(ri.r, addr.t);
+            entry.kind = solve_conflict(entry.reduce, s.idx);
         }
         else
         {
@@ -721,17 +752,17 @@ struct parser
         {
             const auto& entry = parse_table[idx][i];
             if (entry.kind == parse_table_entry_kind::shift)
-                s << "On " << nterm_names[i] << " -> " << entry.shift << "\n";
+                s << "On " << nterm_names[i] << " go to " << entry.shift << "\n";
         }
         for (size i = nterm_count; i < nterm_count + term_count; ++i)
         {
             const auto& entry = parse_table[idx][i];
             if (entry.kind == parse_table_entry_kind::shift)
-                s << "On " << term_names[i - nterm_count] << " -> " << entry.shift << "\n";
+                s << "On " << term_names[i - nterm_count] << " shift to " << entry.shift << "\n";
             else if (entry.kind == parse_table_entry_kind::sr_conflict_prefer_r)
-                s << "On " << term_names[i - nterm_count] << " -> " << entry.shift << " CONFLICT, prefer reduce(" << entry.reduce << ")\n";
+                s << "On " << term_names[i - nterm_count] << " shift to " << entry.shift << " S/R CONFLICT, prefer reduce(" << entry.reduce << ") over shift\n";
             else if (entry.kind == parse_table_entry_kind::sr_conflict_prefer_s)
-                s << "On " << term_names[i - nterm_count] << " -> " << entry.shift << " CONFLICT, prefer over reduce(" << entry.reduce << ")\n";
+                s << "On " << term_names[i - nterm_count] << " shift to " << entry.shift << " S/R CONFLICT, prefer shift over reduce(" << entry.reduce << ")\n";
         }
     }
 
@@ -771,8 +802,8 @@ struct parser
     size state_count = 0;
     situation_queue_entry situation_queue[MaxStates * situation_count] = { 0 };
     size situation_queue_size = 0;
-    size rule_precedence_table[rule_count] = { 0 };
     size term_precedence_table[term_count] = { 0 };
+    size rule_precedence_table[rule_count] = { 0 };    
     DiagStr diag_str;
 };
 
