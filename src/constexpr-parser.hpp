@@ -269,7 +269,7 @@ struct eof
     constexpr static const char* get_name() { return "$$"; }
 };
 
-template<size TermCount, size NTermCount, size RuleCount, size RuleSize, size MaxStates, typename DiagStr>
+template<typename RootValueType, size TermCount, size NTermCount, size RuleCount, size RuleSize, size MaxStates, typename DiagStr>
 struct parser
 {
     static const size term_count = TermCount + 1;
@@ -346,11 +346,11 @@ struct parser
         return term ? nterm_count + idx : idx;
     }
 
-    template<typename... TermValueType, typename... NTermValueType, typename RootValueType, typename... Rules, size MaxStates1, size DiagStrSize1>
+    template<typename RootValueType, typename... TermValueType, typename... NTermValueType, typename... Rules, size MaxStates1, size DiagStrSize1>
     constexpr parser(
+        nterm<RootValueType> root,
         std::tuple<term<TermValueType>...> terms,
         std::tuple<nterm<NTermValueType>...> nterms,
-        nterm<RootValueType> root,
         std::tuple<Rules...> rules,
         std::integral_constant<size, MaxStates1> max_states,
         std::integral_constant<size, DiagStrSize1> diag_str_size):
@@ -359,21 +359,21 @@ struct parser
         write_diag_str(diag_str);
     }
 
-    template<typename... TermValueType, typename... NTermValueType, typename RootValueType, typename... Rules, size MaxStates1>
+    template<typename RootValueType, typename... TermValueType, typename... NTermValueType, typename... Rules, size MaxStates1>
     constexpr parser(
+        nterm<RootValueType> root,
         std::tuple<term<TermValueType>...> terms,
         std::tuple<nterm<NTermValueType>...> nterms,
-        nterm<RootValueType> root,
         std::tuple<Rules...> rules,
         std::integral_constant<size, MaxStates1> max_states):
-        parser(terms, nterms, root, rules)
+        parser(root, terms, nterms, rules)
     {}
 
-    template<typename... TermValueType, typename... NTermValueType, typename RootValueType, typename... Rules>
+    template<typename RootValueType, typename... TermValueType, typename... NTermValueType, typename... Rules>
     constexpr parser(
+        nterm<RootValueType> root,
         std::tuple<term<TermValueType>...> terms,
         std::tuple<nterm<NTermValueType>...> nterms,
-        nterm<RootValueType> root,
         std::tuple<Rules...> rules)
     {
         std::apply([this](auto... t) { (void(analyze_term(t)), ...); }, terms);
@@ -409,7 +409,8 @@ struct parser
     constexpr void analyze_term(term<ValueType> t)
     {
         term_names[t.idx] = t.name;
-        term_precedence_table[t.idx] = t.precedence;
+        term_precedences[t.idx] = t.precedence;
+        term_associativities[t.idx] = t.ass;
     }
 
     template<typename ValueType>
@@ -453,19 +454,25 @@ struct parser
         make_nterm_rule_slices();
     }
 
-    constexpr size calculate_rule_precedence(size precedence, size rule_idx, size rule_size) const
+    constexpr size calculate_rule_last_term(size rule_idx, size rule_size) const
     {
-        if (precedence != 0)
-            return precedence;
         for (int i = int(rule_size - 1); i >= 0; --i)
         {
             const auto& s = right_sides[rule_idx][i];
             if (!s.term)
                 continue;
-            size p = term_precedence_table[s.idx];
-            if (p != 0)
-                return p;
+            return s.idx;
         }
+        return uninitialized;
+    }
+
+    constexpr size calculate_rule_precedence(size precedence, size rule_idx, size rule_size) const
+    {
+        if (precedence != 0)
+            return precedence;
+        size last_term_idx = rule_last_terms[rule_idx];
+        if (last_term_idx != uninitialized)
+            return term_precedences[last_term_idx];
         return 0;
     }
 
@@ -476,7 +483,8 @@ struct parser
         (void(right_sides[Nr][I] = make_symbol(std::get<I>(r.r))), ...);
         constexpr size rule_size = sizeof...(R);
         rule_infos[Nr] = { l_idx, Nr, rule_size };
-        rule_precedence_table[Nr] = calculate_rule_precedence(r.precedence, Nr, rule_size);
+        rule_last_terms[Nr] = calculate_rule_last_term(Nr, rule_size);
+        rule_precedences[Nr] = calculate_rule_precedence(r.precedence, Nr, rule_size);
     }
 
     constexpr size make_situation_idx(situation_address a) const
@@ -636,9 +644,18 @@ struct parser
 
     constexpr auto solve_conflict(size rule_idx, size term_idx) const
     {
-        return rule_precedence_table[rule_idx] > term_precedence_table[term_idx] ?
-            parse_table_entry_kind::sr_conflict_prefer_r
-            : parse_table_entry_kind::sr_conflict_prefer_s;
+        size r_p = rule_precedences[rule_idx];
+        size t_p = term_precedences[term_idx];
+        if (r_p > t_p)
+            return parse_table_entry_kind::sr_conflict_prefer_r;
+
+        if (r_p == t_p && term_associativities[term_idx] == associativity::ltor)
+        {
+            size last_term_idx = rule_last_terms[rule_idx];
+            if (last_term_idx == term_idx)
+                return parse_table_entry_kind::sr_conflict_prefer_r;
+        }
+        return parse_table_entry_kind::sr_conflict_prefer_s;
     }
 
     constexpr void situation_transition(size state_idx, size idx)
@@ -787,6 +804,10 @@ struct parser
         write_diag_str(s);
     }
 
+    template<typename Buffer>
+    constexpr RootValueType parse(const Buffer& buffer) const
+    {}
+
     const char* term_names[term_count] = { 0 };
     const char* nterm_names[nterm_count] = { 0 };
     symbol right_sides[rule_count][RuleSize] = { };
@@ -802,37 +823,39 @@ struct parser
     size state_count = 0;
     situation_queue_entry situation_queue[MaxStates * situation_count] = { 0 };
     size situation_queue_size = 0;
-    size term_precedence_table[term_count] = { 0 };
-    size rule_precedence_table[rule_count] = { 0 };    
+    size term_precedences[term_count] = { 0 }; 
+    associativity term_associativities[term_count] = { associativity::ltor };
+    size rule_precedences[rule_count] = { 0 };
+    size rule_last_terms[rule_count] = { uninitialized };
     DiagStr diag_str;
 };
 
 template<
-    typename... TermValueType, typename... NTermValueType, typename RootValueType, typename... Rules, 
+    typename RootValueType, typename... TermValueType, typename... NTermValueType, typename... Rules,
     size MaxStates, size DiagStrSize
 >
 parser(
+    nterm<RootValueType>,
     std::tuple<term<TermValueType>...>,
     std::tuple<nterm<NTermValueType>...>,
-    nterm<RootValueType>,
     std::tuple<Rules...>,
     std::integral_constant<size, MaxStates>,
     std::integral_constant<size, DiagStrSize>
 ) -> 
-parser<sizeof...(TermValueType), sizeof...(NTermValueType), sizeof...(Rules), max_v<Rules::n...>, MaxStates, cstream<DiagStrSize>>;
+parser<RootValueType, sizeof...(TermValueType), sizeof...(NTermValueType), sizeof...(Rules), max_v<Rules::n...>, MaxStates, cstream<DiagStrSize>>;
 
 template<
-    typename... TermValueType, typename... NTermValueType, typename RootValueType, typename... Rules,
+    typename RootValueType, typename... TermValueType, typename... NTermValueType, typename... Rules,
     size MaxStates
 >
 parser(
+    nterm<RootValueType>,
     std::tuple<term<TermValueType>...>,
     std::tuple<nterm<NTermValueType>...>,
-    nterm<RootValueType>,
     std::tuple<Rules...>,
     std::integral_constant<size, MaxStates>
 ) ->
-parser<sizeof...(TermValueType), sizeof...(NTermValueType), sizeof...(Rules), max_v<Rules::n...>, MaxStates, no_diag_str>;
+parser<RootValueType, sizeof...(TermValueType), sizeof...(NTermValueType), sizeof...(Rules), max_v<Rules::n...>, MaxStates, no_diag_str>;
 
 template<typename... S, size... I>
 constexpr auto make_symbols_impl(std::index_sequence<I...>, S... s)

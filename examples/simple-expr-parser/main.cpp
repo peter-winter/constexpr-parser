@@ -16,9 +16,9 @@ constexpr term o_xor("^", 5);
 constexpr term o_not("!", 6);
 
 parser p(
+    expr,
     make_terms(one, two, o_plus, o_minus, o_mul, o_div, o_or, o_and, o_xor, o_not, "(", ")"),
     make_nterms(expr),
-    expr,
     make_rules(
         expr(expr, "+", expr),
         expr(expr, "-", expr),
