@@ -3,6 +3,7 @@
 #include <limits>
 #include <tuple>
 #include <algorithm>
+#include <sstream>
 
 using size = std::uint64_t;
 using size16 = std::uint16_t;
@@ -15,8 +16,11 @@ constexpr size32 uninitialized32 = size32(-1);
 template<size S>
 using max_states = std::integral_constant<size, S>;
 
+template<size TermCount, size... RuleSizes>
+constexpr size deduce_max_states = ((0 + ... + (RuleSizes + 1)) + 2) * (TermCount + 1);
+
 template<size S>
-using diag_message_size = std::integral_constant<size, S>;
+using message_max_size = std::integral_constant<size, S>;
 
 using char_2 = char[2];
 constexpr size char_strings_size = std::numeric_limits<char>::max();
@@ -29,6 +33,27 @@ constexpr size find(const Container& c, const V& v)
             return std::distance(std::begin(c), i);
     return size(-1);
 }
+
+template<typename T>
+struct optional
+{
+    template<typename T1>
+    constexpr optional(T1&& v):
+        v(std::move(v)), has_object(true)
+    {}
+
+    constexpr optional():
+        v(), has_object(false)
+    {}
+
+    constexpr const T& value() const
+    {
+        return v;
+    }
+
+    bool has_object = false;
+    T v;
+};
 
 template<typename Container, typename Pred>
 constexpr Container& sort(Container& c, Pred p)
@@ -51,19 +76,15 @@ constexpr Container& sort(Container& c, Pred p)
     return c;
 }
 
-struct no_diag_str
-{};
-
 template<size MaxSize>
 struct cstream
 {
     constexpr cstream& operator << (const char* source)
     {
         const char* s = source;
-        char* d = str + current_size;
         while (*s)
         {
-            str[current_size++] = *s++;
+            data[current_size++] = *s++;
         }
 
         return *this;
@@ -73,7 +94,7 @@ struct cstream
     {
         if (x == 0u)
         {
-            str[current_size++] = '0';
+            data[current_size++] = '0';
             return *this;
         }
 
@@ -86,14 +107,14 @@ struct cstream
         }
         for (int i = digit_count - 1; i >= 0; --i)
         {
-            str[current_size++] = '0' + digits[i];
+            data[current_size++] = '0' + digits[i];
         }
         return *this;
     }
 
-    constexpr const char* c_str() const { return str; }
+    constexpr const char* str() const { return data; }
 
-    char str[MaxSize] = { 0 };
+    char data[MaxSize] = { 0 };
     size current_size = 0;
 };
 
@@ -269,7 +290,7 @@ struct eof
     constexpr static const char* get_name() { return "$$"; }
 };
 
-template<typename RootValueType, size TermCount, size NTermCount, size RuleCount, size RuleSize, size MaxStates, typename DiagStr>
+template<typename RootValueType, size TermCount, size NTermCount, size RuleCount, size RuleSize, size MaxStates>
 struct parser
 {
     static const size term_count = TermCount + 1;
@@ -283,6 +304,8 @@ struct parser
 
     using term_subset = bool[term_count];
     using state = bool[situation_count];
+
+    using root_value_type = RootValueType;
 
     struct symbol
     {
@@ -346,34 +369,21 @@ struct parser
         return term ? nterm_count + idx : idx;
     }
 
-    template<typename RootValueType, typename... TermValueType, typename... NTermValueType, typename... Rules, size MaxStates1, size DiagStrSize1>
+    template<typename Root, typename Terms, typename NTerms, typename Rules, typename MaxStates>
     constexpr parser(
-        nterm<RootValueType> root,
-        std::tuple<term<TermValueType>...> terms,
-        std::tuple<nterm<NTermValueType>...> nterms,
-        std::tuple<Rules...> rules,
-        std::integral_constant<size, MaxStates1> max_states,
-        std::integral_constant<size, DiagStrSize1> diag_str_size):
-        parser(terms, nterms, root, rules)
-    {
-        write_diag_str(diag_str);
-    }
-
-    template<typename RootValueType, typename... TermValueType, typename... NTermValueType, typename... Rules, size MaxStates1>
-    constexpr parser(
-        nterm<RootValueType> root,
-        std::tuple<term<TermValueType>...> terms,
-        std::tuple<nterm<NTermValueType>...> nterms,
-        std::tuple<Rules...> rules,
-        std::integral_constant<size, MaxStates1> max_states):
+        Root root,
+        Terms terms,
+        NTerms nterms,
+        Rules rules,
+        MaxStates max_states):
         parser(root, terms, nterms, rules)
     {}
 
-    template<typename RootValueType, typename... TermValueType, typename... NTermValueType, typename... Rules>
+    template<typename Root, typename Terms, typename NTerms, typename... Rules>
     constexpr parser(
-        nterm<RootValueType> root,
-        std::tuple<term<TermValueType>...> terms,
-        std::tuple<nterm<NTermValueType>...> nterms,
+        Root root,
+        Terms terms,
+        NTerms nterms,
         std::tuple<Rules...> rules)
     {
         std::apply([this](auto... t) { (void(analyze_term(t)), ...); }, terms);
@@ -411,6 +421,7 @@ struct parser
         term_names[t.idx] = t.name;
         term_precedences[t.idx] = t.precedence;
         term_associativities[t.idx] = t.ass;
+        trivial_term_table[t.data[0]] = t.idx;
     }
 
     template<typename ValueType>
@@ -442,7 +453,7 @@ struct parser
         return symbol{ true, find(term_names, name) };
     }
 
-    template<typename... Rules, size... I, typename RootValueType>
+    template<typename... Rules, size... I>
     constexpr void analyze_rules(
         std::index_sequence<I...>,
         nterm<RootValueType> root,
@@ -660,7 +671,6 @@ struct parser
 
     constexpr void situation_transition(size state_idx, size idx)
     {
-        std::cout << "";
         situation_address addr = make_situation_address(idx);
         const rule_info& ri = rule_infos[addr.rule_info_idx];
         bool reduction = addr.after >= ri.n;
@@ -793,21 +803,49 @@ struct parser
         }
     }
 
-    constexpr const char* get_diag_msg() const
-    {
-        return diag_str.c_str();
-    }
-
-    template<typename Stream>
-    constexpr void output_diag_msg(Stream& s) const
-    {
-        write_diag_str(s);
-    }
-
     template<typename Buffer>
-    constexpr RootValueType parse(const Buffer& buffer) const
-    {}
+    constexpr size get_next_term(Buffer& buffer) const
+    {
+        if (buffer.eof())
+            return eof_idx;
+        char c = buffer.get_current_char();
+        buffer.advance_to_next_char();
+        return trivial_term_table[c];
+    }
 
+    template<typename Buffer, typename ErrorStream, typename TraceStream>
+    constexpr optional<RootValueType> parse(const Buffer& buffer, ErrorStream& error_stream, TraceStream& trace_stream) const
+    {
+        size current_state = 0;
+        bool error = false;
+
+        while (true)
+        {
+            size term_idx = get_next_term(buffer);
+            const auto& entry = parse_table[current_state][get_parse_table_idx(true, term_idx)];
+            if (entry.kind == parse_table_entry_kind::shift || entry.kind == parse_table_entry_kind::sr_conflict_prefer_s)
+            {
+                current_state = entry.shift;
+            }
+            else if (entry.kind == parse_table_entry_kind::reduce || entry.kind == parse_table_entry_kind::sr_conflict_prefer_r)
+            {
+
+            }
+            else if (entry.kind == parse_table_entry_kind::success)
+            {
+                break;
+            }
+            else
+            {
+                error_stream << "Syntax error" << '\n';
+                error = true;
+                break;
+            }
+        }
+        
+        return RootValueType{};
+    }
+    
     const char* term_names[term_count] = { 0 };
     const char* nterm_names[nterm_count] = { 0 };
     symbol right_sides[rule_count][RuleSize] = { };
@@ -827,27 +865,10 @@ struct parser
     associativity term_associativities[term_count] = { associativity::ltor };
     size rule_precedences[rule_count] = { 0 };
     size rule_last_terms[rule_count] = { uninitialized };
-    DiagStr diag_str;
+    size trivial_term_table[std::numeric_limits<char>::max()] = { uninitialized };
 };
 
-template<
-    typename RootValueType, typename... TermValueType, typename... NTermValueType, typename... Rules,
-    size MaxStates, size DiagStrSize
->
-parser(
-    nterm<RootValueType>,
-    std::tuple<term<TermValueType>...>,
-    std::tuple<nterm<NTermValueType>...>,
-    std::tuple<Rules...>,
-    std::integral_constant<size, MaxStates>,
-    std::integral_constant<size, DiagStrSize>
-) -> 
-parser<RootValueType, sizeof...(TermValueType), sizeof...(NTermValueType), sizeof...(Rules), max_v<Rules::n...>, MaxStates, cstream<DiagStrSize>>;
-
-template<
-    typename RootValueType, typename... TermValueType, typename... NTermValueType, typename... Rules,
-    size MaxStates
->
+template<typename RootValueType, typename... TermValueType, typename... NTermValueType, typename... Rules, size MaxStates>
 parser(
     nterm<RootValueType>,
     std::tuple<term<TermValueType>...>,
@@ -855,7 +876,18 @@ parser(
     std::tuple<Rules...>,
     std::integral_constant<size, MaxStates>
 ) ->
-parser<RootValueType, sizeof...(TermValueType), sizeof...(NTermValueType), sizeof...(Rules), max_v<Rules::n...>, MaxStates, no_diag_str>;
+parser<RootValueType, sizeof...(TermValueType), sizeof...(NTermValueType), sizeof...(Rules), max_v<Rules::n...>, MaxStates>;
+
+template<typename RootValueType, typename... TermValueType, typename... NTermValueType, typename... Rules>
+parser(
+    nterm<RootValueType>,
+    std::tuple<term<TermValueType>...>,
+    std::tuple<nterm<NTermValueType>...>,
+    std::tuple<Rules...>
+) ->
+parser<RootValueType, sizeof...(TermValueType), sizeof...(NTermValueType), sizeof...(Rules), max_v<Rules::n...>, 
+    deduce_max_states<sizeof...(TermValueType), Rules::n...>
+>;
 
 template<typename... S, size... I>
 constexpr auto make_symbols_impl(std::index_sequence<I...>, S... s)
@@ -892,3 +924,116 @@ constexpr auto make_rules(Rules... rules)
 {
     return std::make_tuple(rules...);
 }
+
+struct use_string_stream
+{};
+
+template<typename StreamType>
+struct diag_msg
+{
+    template<typename Parser, size Size>
+    constexpr diag_msg(const Parser& p, message_max_size<Size>)
+    {
+        p.write_diag_str(stream);
+    }
+
+    template<typename Parser>
+    constexpr diag_msg(const Parser& p, use_string_stream)
+    {
+        p.write_diag_str(stream);
+    }
+
+    const StreamType& get_stream() const
+    {
+        return stream;
+    }
+
+    StreamType stream;
+};
+
+template<typename Parser, size Size>
+diag_msg(const Parser&, message_max_size<Size>)->diag_msg<cstream<Size>>;
+
+template<typename Parser>
+diag_msg(const Parser&, use_string_stream)->diag_msg<std::stringstream>;
+
+template<typename ValueType, typename ErrorStreamType, typename TraceStreamType>
+struct parse_result
+{
+    ErrorStreamType error_stream;
+    TraceStreamType trace_stream;
+    optional<ValueType> value{};
+
+    template<typename Parser, size ErrorStreamSize, size TraceStreamSize, typename Buffer>
+    constexpr parse_result(const Parser& p, const Buffer& buffer, message_max_size<ErrorStreamSize>, message_max_size<TraceStreamSize>):
+        parse_result(p, buffer)
+    {}
+
+    template<typename Parser, size ErrorStreamSize, typename Buffer>
+    constexpr parse_result(const Parser& p, const Buffer& buffer, message_max_size<ErrorStreamSize>):
+        parse_result(p, buffer)
+    {}
+
+    template<typename Parser, typename Buffer>
+    constexpr parse_result(const Parser& p, const Buffer& buffer, use_string_stream, use_string_stream):
+        parse_result(p, buffer)
+    {}
+
+    template<typename Parser, typename Buffer>
+    constexpr parse_result(const Parser& p, const Buffer& buffer, use_string_stream):
+        parse_result(p, buffer)
+    {}
+
+    template<typename Parser, typename Buffer>
+    constexpr parse_result(const Parser& p, const Buffer& buffer)
+    {
+        value = p.parse(buffer, error_stream, trace_stream);
+    }
+
+    constexpr const auto& get_error_stream() const { return error_stream; }
+    constexpr const auto& get_trace_stream() const { return trace_stream; }
+};
+
+struct no_stream
+{
+    template<typename T>
+    constexpr const no_stream& operator <<(T&&) const { return *this; }
+};
+
+template<typename Parser, typename Buffer, size ErrorStreamSize, size TraceStreamSize>
+parse_result(const Parser&, const Buffer&, message_max_size<ErrorStreamSize>, message_max_size<TraceStreamSize>)
+->parse_result<typename Parser::root_value_type, cstream<ErrorStreamSize>, cstream<TraceStreamSize>>;
+
+template<typename Parser, typename Buffer>
+parse_result(const Parser&, const Buffer&, use_string_stream, use_string_stream)
+->parse_result<typename Parser::root_value_type, std::stringstream, std::stringstream>;
+
+template<typename Parser, typename Buffer, size ErrorStreamSize>
+parse_result(const Parser&, const Buffer&, message_max_size<ErrorStreamSize>)
+->parse_result<typename Parser::root_value_type, cstream<ErrorStreamSize>, no_stream>;
+
+template<typename Parser, typename Buffer>
+parse_result(const Parser&, const Buffer&, use_string_stream)
+->parse_result<typename Parser::root_value_type, std::stringstream, no_stream>;
+
+template<typename Parser, typename Buffer>
+parse_result(const Parser&, const Buffer&)
+->parse_result<typename Parser::root_value_type, no_stream, no_stream>;
+
+template<size N>
+struct cstring_buffer
+{
+    constexpr cstring_buffer(const char (&data)[N])
+    {}
+
+    constexpr size get_size() const { return N - 1; }
+    constexpr bool eof() const { return ptr == N - 1; }
+    constexpr char get_current_char() const { return data[ptr]; }
+    constexpr void advance_to_next_char() { if (N < size()) ptr++; }
+
+    size ptr = 0;
+    char data[N] = { 0 };
+};
+
+template<size N>
+cstring_buffer(const char(&)[N])->cstring_buffer<N>;

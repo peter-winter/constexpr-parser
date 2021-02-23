@@ -15,7 +15,7 @@ constexpr term o_and("&", 4);
 constexpr term o_xor("^", 5);
 constexpr term o_not("!", 6);
 
-parser p(
+constexpr parser p(
     expr,
     make_terms(one, two, o_plus, o_minus, o_mul, o_div, o_or, o_and, o_xor, o_not, "(", ")"),
     make_nterms(expr),
@@ -32,17 +32,20 @@ parser p(
         expr("(", expr, ")"),
         expr("1"),
         expr("2")
-    ),
-    max_states<100>{}
-    //diag_message_size<100000>{}
+    )
 );
 
-//constexpr const char* msg = p.get_diag_msg();
+//diag_msg msg(p, use_string_stream{});
+
+constexpr parse_result res(p, cstring_buffer("1+1"), message_max_size<100>{}, message_max_size<100>{});
 
 int main()
 {
-    //std::cout << msg;
-    p.output_diag_msg(std::cout);
+    //std::cout << msg.get_stream().str();
+
+    std::cout << res.get_error_stream().str();
+    std::cout << res.get_trace_stream().str();
+    std::cout << res.value();
     return 0;
 }
 
