@@ -38,14 +38,15 @@ constexpr parser p(
 //diag_msg msg(p, use_string_stream{});
 
 constexpr parse_result res(p, cstring_buffer("1+1"), message_max_size<100>{}, message_max_size<100>{});
+//parse_result res(p, cstring_buffer("1+1"), use_string_stream{}, use_string_stream{});
 
 int main()
 {
     //std::cout << msg.get_stream().str();
 
-    std::cout << res.get_error_stream().str();
+    //std::cout << res.get_error_stream().str();
     std::cout << res.get_trace_stream().str();
-    std::cout << res.value();
+    //std::cout << res.get_value();
     return 0;
 }
 

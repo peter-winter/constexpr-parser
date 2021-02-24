@@ -4,6 +4,7 @@
 #include <tuple>
 #include <algorithm>
 #include <sstream>
+#include <vector>
 
 using size = std::uint64_t;
 using size16 = std::uint16_t;
@@ -22,8 +23,84 @@ constexpr size deduce_max_states = ((0 + ... + (RuleSizes + 1)) + 2) * (TermCoun
 template<size S>
 using message_max_size = std::integral_constant<size, S>;
 
-using char_2 = char[2];
-constexpr size char_strings_size = std::numeric_limits<char>::max();
+template<typename Buffer>
+struct parse_table_cursor_stack_type
+{
+    using type = std::vector<size>;
+};
+
+template<typename Buffer>
+using parse_table_cursor_stack_type_t = typename parse_table_cursor_stack_type<Buffer>::type;
+
+template<typename Buffer, size MaxValueTypeSize>
+struct parser_value_stack_type
+{
+    using type = std::vector<std::byte>;
+};
+
+template<typename Buffer, size MaxValueTypeSize>
+using parser_value_stack_type_t = typename parser_value_stack_type<Buffer, MaxValueTypeSize>::type;
+
+template<typename T, size N>
+struct cvector
+{
+    constexpr cvector() :
+        data{}, current_size(0)
+    {}
+
+    struct iterator
+    {
+        T* ptr;
+        constexpr bool operator == (const iterator& other) const { return ptr == other.ptr; }
+        constexpr T& operator *() const { return *ptr; }
+        constexpr iterator operator - (size amount) const { return iterator{ ptr - amount }; }
+        constexpr iterator operator + (size amount) const { return iterator{ ptr + amount }; }
+        constexpr iterator operator ++(int) { iterator it{ ptr }; ++ptr; return it; }
+        constexpr iterator* operator ++() { ++ptr; return *this; }
+        constexpr bool operator > (const iterator& other) const { return ptr > other.ptr; }
+        constexpr bool operator < (const iterator& other) const { return ptr < other.ptr; }
+    };
+
+    struct const_iterator
+    {
+        const T* ptr;
+        constexpr bool operator == (const const_iterator& other) const { return ptr == other.ptr; }
+        constexpr const T& operator *() const { return *ptr; }
+        constexpr const_iterator operator - (size amount) const { return const_iterator{ ptr - amount }; }
+        constexpr const_iterator operator + (size amount) const { return const_iterator{ ptr - amount }; }
+        constexpr const_iterator operator ++(int) { const_iterator it{ ptr }; ++ptr; return it; }
+        constexpr const_iterator* operator ++() { ++ptr; return *this; }
+        constexpr bool operator > (const const_iterator& other) const { return ptr > other.ptr; }
+        constexpr bool operator < (const const_iterator& other) const { return ptr < other.ptr; }
+    };
+
+    constexpr void reserve(size) const {};
+    constexpr void resize(size) const {};
+    constexpr const T& operator[](size idx) const { return data[idx]; }
+    constexpr T& operator[](size idx) { return data[idx]; }
+    constexpr void push_back(const T& v) { data[current_size++] = v; }
+    constexpr void emplace_back(T&& v) { data[current_size++] = std::move(v); }
+    constexpr T& back() { return data[current_size - 1]; }
+    constexpr const T& back() const { return data[current_size - 1]; }
+    constexpr const_iterator begin() const { return iterator{ data }; }
+    constexpr const_iterator end() const { return iterator{ data + N }; }
+    constexpr iterator begin() { return iterator{ data }; }
+    constexpr iterator end() { return iterator{ data + current_size }; }
+    constexpr iterator erase(iterator first, iterator last)
+    {
+        auto from = first < begin() ? begin() : first;
+        auto to = last > end() ? end() : last;
+        while (!(from == to))
+        {
+            (*from++).~T();
+            current_size--;
+        }
+        return end();
+    }
+
+    T data[N];
+    size current_size;
+};
 
 template<typename Container, typename V>
 constexpr size find(const Container& c, const V& v)
@@ -38,21 +115,21 @@ template<typename T>
 struct optional
 {
     template<typename T1>
-    constexpr optional(T1&& v):
-        v(std::move(v)), has_object(true)
+    constexpr optional(T1&& object):
+        object(std::move(object)), has_object(true)
     {}
 
     constexpr optional():
-        v(), has_object(false)
+        object(), has_object(false)
     {}
 
-    constexpr const T& value() const
+    constexpr const T& get_object() const
     {
-        return v;
+        return object;
     }
 
     bool has_object = false;
-    T v;
+    T object;
 };
 
 template<typename Container, typename Pred>
@@ -176,6 +253,15 @@ constexpr size max_v = max<X...>::value;
 
 struct no_value {};
 
+template<typename T>
+constexpr size optimized_size = sizeof(T);
+
+template<>
+constexpr size optimized_size<no_value> = 0;
+
+template<typename... T>
+constexpr size optimized_size_sum = (0 + ... + optimized_size<T>);
+
 template<typename ValueType>
 struct nterm
 {
@@ -287,10 +373,10 @@ struct term
 
 struct eof
 {
-    constexpr static const char* get_name() { return "$$"; }
+    constexpr static const char* get_name() { return "<eof>"; }
 };
 
-template<typename RootValueType, size TermCount, size NTermCount, size RuleCount, size RuleSize, size MaxStates>
+template<typename RootValueType, size TermCount, size NTermCount, size RuleCount, size RuleSize, size MaxValueTypeSize, size MaxStates>
 struct parser
 {
     static const size term_count = TermCount + 1;
@@ -341,9 +427,11 @@ struct parser
 
     struct rule_info
     {
-        size l;
-        size r;
-        size n;
+        size l_idx;
+        size r_idx;
+        size r_elements;
+        size l_byte_size;
+        size r_byte_size;
     };
 
     struct situation_queue_entry
@@ -352,7 +440,7 @@ struct parser
         size idx;
     };
 
-    enum class parse_table_entry_kind : size32 { shift, reduce, error, success, sr_conflict_prefer_s, sr_conflict_prefer_r, rr_conflict };
+    enum class parse_table_entry_kind : size32 { shift, reduce, error, success, rr_conflict };
 
     struct parse_table_entry
     {
@@ -364,18 +452,44 @@ struct parser
         constexpr bool has_reduce() const { return reduce != uninitialized16; }
     };
 
+    static const size value_stack_initial_capacity = 1 << 10;
+    static const size cursor_stack_initial_capacity = 1 << 10;
+        
+    template<typename CursorStack, typename ValueStack, typename ErrorStream, typename TraceStream>
+    struct parser_state
+    {
+        constexpr parser_state(
+            CursorStack& cursor_stack,
+            ValueStack& value_stack,
+            ErrorStream& error_stream,
+            TraceStream& trace_stream):
+            cursor_stack(cursor_stack),
+            value_stack(value_stack),
+            error_stream(error_stream),
+            trace_stream(trace_stream)
+        {
+            cursor_stack.reserve(cursor_stack_initial_capacity);
+            value_stack.reserve(value_stack_initial_capacity * MaxValueTypeSize);
+        }
+
+        CursorStack& cursor_stack;
+        ValueStack& value_stack;
+        ErrorStream& error_stream;
+        TraceStream& trace_stream;
+    };
+
     constexpr static size get_parse_table_idx(bool term, size idx)
     {
         return term ? nterm_count + idx : idx;
     }
 
-    template<typename Root, typename Terms, typename NTerms, typename Rules, typename MaxStates>
+    template<typename Root, typename Terms, typename NTerms, typename Rules, typename MaxStatesDef>
     constexpr parser(
         Root root,
         Terms terms,
         NTerms nterms,
         Rules rules,
-        MaxStates max_states):
+        MaxStatesDef):
         parser(root, terms, nterms, rules)
     {}
 
@@ -399,9 +513,9 @@ struct parser
         size nt = 0;
         for (size i = 0u; i < rule_count; ++i)
         {
-            if (nt != rule_infos[i].l)
+            if (nt != rule_infos[i].l_idx)
             {
-                nt = rule_infos[i].l;
+                nt = rule_infos[i].l_idx;
                 nterm_rule_slices[nt].start = i;
                 nterm_rule_slices[nt].n = 1;
             }
@@ -461,7 +575,7 @@ struct parser
     {
         (void(analyze_rule<I>(std::get<I>(rules), std::make_index_sequence<Rules::n>{})), ...);
         analyze_rule<root_rule_idx>(fake_root<RootValueType>{}(root), std::index_sequence<0>{});
-        sort(rule_infos, [](const auto& l1, const auto& l2) { return l1.l < l2.l; });
+        sort(rule_infos, [](const auto& ri1, const auto& ri2) { return ri1.l_idx < ri2.l_idx; });
         make_nterm_rule_slices();
     }
 
@@ -493,7 +607,7 @@ struct parser
         size l_idx = find(nterm_names, r.l.get_name());
         (void(right_sides[Nr][I] = make_symbol(std::get<I>(r.r))), ...);
         constexpr size rule_size = sizeof...(R);
-        rule_infos[Nr] = { l_idx, Nr, rule_size };
+        rule_infos[Nr] = { l_idx, Nr, rule_size, optimized_size<L>, optimized_size_sum<R...> };
         rule_last_terms[Nr] = calculate_rule_last_term(Nr, rule_size);
         rule_precedences[Nr] = calculate_rule_precedence(r.precedence, Nr, rule_size);
     }
@@ -520,9 +634,9 @@ struct parser
 
     constexpr const term_subset& make_right_side_slice_first(const rule_info& ri, size start, term_subset& res)
     {
-        for (size i = start; i < ri.n; ++i)
+        for (size i = start; i < ri.r_elements; ++i)
         {
-            const symbol& s = right_sides[ri.r][i];
+            const symbol& s = right_sides[ri.r_idx][i];
             if (s.term)
             {
                 res[s.idx] = true;
@@ -552,9 +666,9 @@ struct parser
 
     constexpr bool is_right_side_slice_empty(const rule_info& ri, size start)
     {
-        for (size i = start; i < ri.n; ++i)
+        for (size i = start; i < ri.r_elements; ++i)
         {
-            const symbol& s = right_sides[ri.r][i];
+            const symbol& s = right_sides[ri.r_idx][i];
             if (s.term)
                 return false;
             if (!make_nterm_empty(s.idx))
@@ -630,10 +744,10 @@ struct parser
     {
         situation_address addr = make_situation_address(idx);
         const rule_info& ri = rule_infos[addr.rule_info_idx];
-        if (addr.after >= ri.n)
+        if (addr.after >= ri.r_elements)
             return;
 
-        const symbol& s = right_sides[ri.r][addr.after];
+        const symbol& s = right_sides[ri.r_idx][addr.after];
         if (!s.term)
         {
             size nt = s.idx;
@@ -653,40 +767,41 @@ struct parser
         }
     }
 
-    constexpr auto solve_conflict(size rule_idx, size term_idx) const
+    constexpr auto solve_conflict(size rule_info_idx, size term_idx) const
     {
+        size rule_idx = rule_infos[rule_info_idx].r_idx;
         size r_p = rule_precedences[rule_idx];
         size t_p = term_precedences[term_idx];
         if (r_p > t_p)
-            return parse_table_entry_kind::sr_conflict_prefer_r;
+            return parse_table_entry_kind::reduce;
 
         if (r_p == t_p && term_associativities[term_idx] == associativity::ltor)
         {
             size last_term_idx = rule_last_terms[rule_idx];
             if (last_term_idx == term_idx)
-                return parse_table_entry_kind::sr_conflict_prefer_r;
+                return parse_table_entry_kind::reduce;
         }
-        return parse_table_entry_kind::sr_conflict_prefer_s;
+        return parse_table_entry_kind::shift;
     }
 
     constexpr void situation_transition(size state_idx, size idx)
     {
         situation_address addr = make_situation_address(idx);
         const rule_info& ri = rule_infos[addr.rule_info_idx];
-        bool reduction = addr.after >= ri.n;
+        bool reduction = addr.after >= ri.r_elements;
 
-        const auto& s = right_sides[ri.r][addr.after];
+        const auto& s = right_sides[ri.r_idx][addr.after];
         size symbol_idx = reduction ? get_parse_table_idx(true, addr.t) : s.get_parse_table_idx();
         auto& entry = parse_table[state_idx][symbol_idx];
         if (reduction)
         {
-            if (ri.r == root_rule_idx)
+            if (ri.r_idx == root_rule_idx)
             {
                 entry.kind = parse_table_entry_kind::success;
             }
             else if (entry.has_shift())
             {
-                entry.kind = solve_conflict(ri.r, addr.t);
+                entry.kind = solve_conflict(addr.rule_info_idx, addr.t);
             }
             else if (entry.has_reduce())
             {
@@ -696,7 +811,7 @@ struct parser
             {
                 entry.kind = parse_table_entry_kind::reduce;
             }
-            entry.reduce = size16(ri.r);
+            entry.reduce = size16(addr.rule_info_idx);
             return;
         }
 
@@ -746,15 +861,15 @@ struct parser
     {
         const situation_address addr = make_situation_address(idx);
         const rule_info& ri = rule_infos[addr.rule_info_idx];
-        s << nterm_names[ri.l] << " <- ";
+        s << nterm_names[ri.l_idx] << " <- ";
         for (size i = 0u; i < addr.after; ++i)
         {
-            s << get_symbol_name(right_sides[ri.r][i]) << " ";
+            s << get_symbol_name(right_sides[ri.r_idx][i]) << " ";
         }
         s << ". ";
-        for (size i = addr.after; i < ri.n; ++i)
+        for (size i = addr.after; i < ri.r_elements; ++i)
         {
-            s << get_symbol_name(right_sides[ri.r][i]) << " ";
+            s << get_symbol_name(right_sides[ri.r_idx][i]) << " ";
         }
         s << "| " << term_names[addr.t];
     }
@@ -784,12 +899,23 @@ struct parser
         for (size i = nterm_count; i < nterm_count + term_count; ++i)
         {
             const auto& entry = parse_table[idx][i];
-            if (entry.kind == parse_table_entry_kind::shift)
-                s << "On " << term_names[i - nterm_count] << " shift to " << entry.shift << "\n";
-            else if (entry.kind == parse_table_entry_kind::sr_conflict_prefer_r)
-                s << "On " << term_names[i - nterm_count] << " shift to " << entry.shift << " S/R CONFLICT, prefer reduce(" << entry.reduce << ") over shift\n";
-            else if (entry.kind == parse_table_entry_kind::sr_conflict_prefer_s)
-                s << "On " << term_names[i - nterm_count] << " shift to " << entry.shift << " S/R CONFLICT, prefer shift over reduce(" << entry.reduce << ")\n";
+            if (entry.kind == parse_table_entry_kind::error)
+                continue;
+
+            size term_idx = i - nterm_count;            
+            s << "On " << term_names[term_idx];
+            if (entry.kind == parse_table_entry_kind::success)
+                s << " success \n";
+            else if (entry.kind == parse_table_entry_kind::shift)
+                s << " shift to " << entry.shift << "\n";
+            else if (entry.kind == parse_table_entry_kind::reduce && entry.has_shift())
+                s << " shift to " << entry.shift << " S/R CONFLICT, prefer reduce(" << rule_infos[entry.reduce].r_idx << ") over shift\n";
+            else if (entry.kind == parse_table_entry_kind::shift && entry.has_reduce())
+                s << " shift to " << entry.shift << " S/R CONFLICT, prefer shift over reduce(" << rule_infos[entry.reduce].r_idx << ")\n";
+            else if (entry.kind == parse_table_entry_kind::reduce)
+                s << " reduce using (" << rule_infos[entry.reduce].r_idx << ")\n";
+            else if (entry.kind == parse_table_entry_kind::rr_conflict)
+                s << " R/R CONFLICT - !!! FIX IT !!! \n";
         }
     }
 
@@ -803,47 +929,128 @@ struct parser
         }
     }
 
-    template<typename Buffer>
-    constexpr size get_next_term(Buffer& buffer) const
+    template<typename Stream>
+    constexpr void write_lexer_error_to_stream(Stream& stream) const
     {
-        if (buffer.eof())
-            return eof_idx;
-        char c = buffer.get_current_char();
-        buffer.advance_to_next_char();
-        return trivial_term_table[c];
+        stream << "Lexer error: " << "\n";
     }
 
     template<typename Buffer, typename ErrorStream, typename TraceStream>
-    constexpr optional<RootValueType> parse(const Buffer& buffer, ErrorStream& error_stream, TraceStream& trace_stream) const
+    constexpr size get_next_term(const Buffer& buffer, typename Buffer::iterator& it, ErrorStream& error_stream, TraceStream& trace_stream) const
     {
-        size current_state = 0;
+        size res = uninitialized;
+        if (it == buffer.end())
+        {
+            res = eof_idx;
+        }
+        else
+        {
+            char c = *it++;
+            res = trivial_term_table[c];
+        }
+
+        if (res != uninitialized)
+        {
+            trace_stream << "Recognized " << term_names[res] << " \n";
+        }
+        return res;
+    }
+
+    template<typename ParserState>
+    constexpr void shift(ParserState& ps, size new_cursor_value) const
+    {
+        ps.trace_stream << "Shift to " << new_cursor_value << "\n";
+        ps.cursor_stack.push_back(new_cursor_value);
+    }
+
+    template<typename ParserState>
+    constexpr void reduce(ParserState& ps, size rule_info_idx) const
+    {
+        ps.trace_stream << "Reduce using rule " << rule_info_idx << "\n";
+        const auto& ri = rule_infos[rule_info_idx];
+        ps.cursor_stack.erase(ps.cursor_stack.end() - ri.r_elements, ps.cursor_stack.end());
+        ps.cursor_stack.push_back(parse_table[ps.cursor_stack.back()][ri.l_idx].shift);
+    }
+
+    template<typename ParserState>
+    constexpr void rr_conflict(ParserState& ps, size rule_idx) const
+    {
+        ps.trace_stream << "R/R conflict encountered \n";
+        reduce(ps, rule_idx);
+    }
+
+    template<typename Stream>
+    constexpr void write_syntax_error_to_stream(size parse_table_cursor, Stream& stream) const
+    {
+        stream << "Syntax error: " << "\n";
+    }
+
+    template<typename ParserState>
+    constexpr void syntax_error(ParserState& ps) const
+    {
+        size cursor = ps.cursor_stack.back();
+        write_syntax_error_to_stream(cursor, ps.error_stream);
+        write_syntax_error_to_stream(cursor, ps.trace_stream);
+    }
+
+    template<typename ParserState>
+    constexpr void success(ParserState& ps) const
+    {
+        ps.trace_stream << "Success \n";
+    }
+
+    template<typename Buffer, typename ErrorStream, typename TraceStream>
+    constexpr auto parse(const Buffer& buffer, ErrorStream& error_stream, TraceStream& trace_stream) const
+    {
+        parser_value_stack_type_t<Buffer, MaxValueTypeSize> value_stack{};
+        parse_table_cursor_stack_type_t<Buffer> cursor_stack{};
+        parser_state ps(cursor_stack, value_stack, error_stream, trace_stream);
+
         bool error = false;
+        typename Buffer::iterator it = buffer.begin();
+
+        ps.cursor_stack.push_back(0);
+        size term_idx = uninitialized;
+        bool next_term_needed = true;
 
         while (true)
         {
-            size term_idx = get_next_term(buffer);
-            const auto& entry = parse_table[current_state][get_parse_table_idx(true, term_idx)];
-            if (entry.kind == parse_table_entry_kind::shift || entry.kind == parse_table_entry_kind::sr_conflict_prefer_s)
+            size cursor = ps.cursor_stack.back();
+            if (next_term_needed)
             {
-                current_state = entry.shift;
+                term_idx = get_next_term(buffer, it, error_stream, trace_stream);
+                next_term_needed = false;
             }
-            else if (entry.kind == parse_table_entry_kind::reduce || entry.kind == parse_table_entry_kind::sr_conflict_prefer_r)
+            if (term_idx == uninitialized)
             {
+                error = true;
+                break;
+            }
 
+            const auto& entry = parse_table[cursor][get_parse_table_idx(true, term_idx)];
+            if (entry.kind == parse_table_entry_kind::shift)
+            {
+                shift(ps, entry.shift);
+                next_term_needed = true;
             }
+            else if (entry.kind == parse_table_entry_kind::reduce)
+                reduce(ps, entry.reduce);
+            else if (entry.kind == parse_table_entry_kind::rr_conflict)
+                rr_conflict(ps, entry.reduce);
             else if (entry.kind == parse_table_entry_kind::success)
             {
+                success(ps);
                 break;
             }
             else
             {
-                error_stream << "Syntax error" << '\n';
+                syntax_error(ps);
                 error = true;
                 break;
             }
         }
         
-        return RootValueType{};
+        return error ? optional<RootValueType>() : RootValueType{};
     }
     
     const char* term_names[term_count] = { 0 };
@@ -876,7 +1083,14 @@ parser(
     std::tuple<Rules...>,
     std::integral_constant<size, MaxStates>
 ) ->
-parser<RootValueType, sizeof...(TermValueType), sizeof...(NTermValueType), sizeof...(Rules), max_v<Rules::n...>, MaxStates>;
+parser<
+    RootValueType, 
+    sizeof...(TermValueType), 
+    sizeof...(NTermValueType), 
+    sizeof...(Rules), 
+    max_v<Rules::n...>, 
+    max_v<sizeof(TermValueType)..., sizeof(NTermValueType)...>,
+    MaxStates>;
 
 template<typename RootValueType, typename... TermValueType, typename... NTermValueType, typename... Rules>
 parser(
@@ -885,7 +1099,13 @@ parser(
     std::tuple<nterm<NTermValueType>...>,
     std::tuple<Rules...>
 ) ->
-parser<RootValueType, sizeof...(TermValueType), sizeof...(NTermValueType), sizeof...(Rules), max_v<Rules::n...>, 
+parser<
+    RootValueType, 
+    sizeof...(TermValueType), 
+    sizeof...(NTermValueType), 
+    sizeof...(Rules), 
+    max_v<Rules::n...>,
+    max_v<sizeof(TermValueType)..., sizeof(NTermValueType)...>,
     deduce_max_states<sizeof...(TermValueType), Rules::n...>
 >;
 
@@ -990,8 +1210,11 @@ struct parse_result
         value = p.parse(buffer, error_stream, trace_stream);
     }
 
+    constexpr bool success() const { return value.has_object(); }
+
     constexpr const auto& get_error_stream() const { return error_stream; }
     constexpr const auto& get_trace_stream() const { return trace_stream; }
+    constexpr const auto get_value() const { return value.get_object(); }
 };
 
 struct no_stream
@@ -1023,17 +1246,44 @@ parse_result(const Parser&, const Buffer&)
 template<size N>
 struct cstring_buffer
 {
-    constexpr cstring_buffer(const char (&data)[N])
-    {}
+    constexpr cstring_buffer(const char (&source)[N])
+    {
+        init(source, std::make_index_sequence<N>{});
+    }
+    
+    template<size... I>
+    constexpr auto init(const char(&source)[N], std::index_sequence<I...>)
+    {
+        (void(data[I] = source[I]),...);
+    }
 
-    constexpr size get_size() const { return N - 1; }
-    constexpr bool eof() const { return ptr == N - 1; }
-    constexpr char get_current_char() const { return data[ptr]; }
-    constexpr void advance_to_next_char() { if (N < size()) ptr++; }
+    struct iterator
+    {
+        const char* ptr;
 
-    size ptr = 0;
+        constexpr char operator *() { return *ptr; }
+        constexpr iterator& operator ++() { ++ptr; return *this; }
+        constexpr iterator operator ++(int) { iterator i(*this); ++ptr; return i; }
+        constexpr bool operator == (const iterator& other) { return ptr == other.ptr; }
+    };
+
+    constexpr iterator begin() const { return iterator{ data }; }
+    constexpr iterator end() const { return iterator{ data + N - 1 }; }
+
     char data[N] = { 0 };
 };
 
 template<size N>
 cstring_buffer(const char(&)[N])->cstring_buffer<N>;
+
+template<size N>
+struct parse_table_cursor_stack_type<cstring_buffer<N>>
+{
+    using type = cvector<size, N>;
+};
+
+template<size N, size MaxValueTypeSize>
+struct parser_value_stack_type<cstring_buffer<N>, MaxValueTypeSize>
+{
+    using type = cvector<std::byte, N * MaxValueTypeSize>;
+};
