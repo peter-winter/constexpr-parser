@@ -37,7 +37,7 @@ constexpr parser p(
 
 //diag_msg msg(p, use_string_stream{});
 
-constexpr parse_result res(p, cstring_buffer("1+1"), message_max_size<100>{}, message_max_size<100>{});
+constexpr parse_result res(p, cstring_buffer("1+1"), message_max_size<1000>{}, message_max_size<1000>{});
 //parse_result res(p, cstring_buffer("1+1"), use_string_stream{}, use_string_stream{});
 
 int main()

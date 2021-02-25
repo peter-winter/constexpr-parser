@@ -7,6 +7,7 @@
 #include <vector>
 
 using size = std::uint64_t;
+using size8 = std::uint8_t;
 using size16 = std::uint16_t;
 using size32 = std::uint32_t;
 
@@ -54,9 +55,10 @@ struct cvector
         constexpr bool operator == (const iterator& other) const { return ptr == other.ptr; }
         constexpr T& operator *() const { return *ptr; }
         constexpr iterator operator - (size amount) const { return iterator{ ptr - amount }; }
+        constexpr size operator - (const iterator& other) const { return size(ptr - other.ptr); }
         constexpr iterator operator + (size amount) const { return iterator{ ptr + amount }; }
         constexpr iterator operator ++(int) { iterator it{ ptr }; ++ptr; return it; }
-        constexpr iterator* operator ++() { ++ptr; return *this; }
+        constexpr iterator operator ++() { ++ptr; return *this; }
         constexpr bool operator > (const iterator& other) const { return ptr > other.ptr; }
         constexpr bool operator < (const iterator& other) const { return ptr < other.ptr; }
     };
@@ -67,9 +69,10 @@ struct cvector
         constexpr bool operator == (const const_iterator& other) const { return ptr == other.ptr; }
         constexpr const T& operator *() const { return *ptr; }
         constexpr const_iterator operator - (size amount) const { return const_iterator{ ptr - amount }; }
+        constexpr size operator - (const const_iterator& other) const { return size(ptr - other.ptr); }
         constexpr const_iterator operator + (size amount) const { return const_iterator{ ptr - amount }; }
         constexpr const_iterator operator ++(int) { const_iterator it{ ptr }; ++ptr; return it; }
-        constexpr const_iterator* operator ++() { ++ptr; return *this; }
+        constexpr const_iterator operator ++() { ++ptr; return *this; }
         constexpr bool operator > (const const_iterator& other) const { return ptr > other.ptr; }
         constexpr bool operator < (const const_iterator& other) const { return ptr < other.ptr; }
     };
@@ -88,13 +91,11 @@ struct cvector
     constexpr iterator end() { return iterator{ data + current_size }; }
     constexpr iterator erase(iterator first, iterator last)
     {
+        if (!(first < last))
+            return end();
         auto from = first < begin() ? begin() : first;
         auto to = last > end() ? end() : last;
-        while (!(from == to))
-        {
-            (*from++).~T();
-            current_size--;
-        }
+        current_size -= (to - from);
         return end();
     }
 
@@ -440,16 +441,18 @@ struct parser
         size idx;
     };
 
-    enum class parse_table_entry_kind : size32 { shift, reduce, error, success, rr_conflict };
+    enum class parse_table_entry_kind : size16 { error, success, shift, reduce, rr_conflict };
 
     struct parse_table_entry
     {
-        parse_table_entry_kind kind = { parse_table_entry_kind::error };
-        size16 shift = size16(uninitialized16);
-        size16 reduce = size16(uninitialized16);
+        parse_table_entry_kind kind;
+        size16 shift;
+        size16 reduce;
+        size8 has_shift;
+        size8 has_reduce;
 
-        constexpr bool has_shift() const { return shift != uninitialized16; }
-        constexpr bool has_reduce() const { return reduce != uninitialized16; }
+        constexpr void set_shift(size16 value) { shift = value; has_shift = 1; }
+        constexpr void set_reduce(size16 value) { reduce = value; has_reduce = 1; }
     };
 
     static const size value_stack_initial_capacity = 1 << 10;
@@ -506,6 +509,8 @@ struct parser
         analyze_nterm(fake_root<RootValueType>{});
         analyze_rules(std::index_sequence_for<Rules...>{}, root, rules);
         analyze_states();
+
+        for (auto x : trivial_term_table) x = uninitialized;
     }
 
     constexpr void make_nterm_rule_slices()
@@ -799,11 +804,11 @@ struct parser
             {
                 entry.kind = parse_table_entry_kind::success;
             }
-            else if (entry.has_shift())
+            else if (entry.has_shift)
             {
                 entry.kind = solve_conflict(addr.rule_info_idx, addr.t);
             }
-            else if (entry.has_reduce())
+            else if (entry.has_reduce)
             {
                 entry.kind = parse_table_entry_kind::rr_conflict;
             }
@@ -811,14 +816,14 @@ struct parser
             {
                 entry.kind = parse_table_entry_kind::reduce;
             }
-            entry.reduce = size16(addr.rule_info_idx);
+            entry.set_reduce(size16(addr.rule_info_idx));
             return;
         }
 
         situation_address new_addr = situation_address{ addr.rule_info_idx, addr.after + 1, addr.t };
         size new_idx = make_situation_idx(new_addr);
 
-        if (entry.has_shift())
+        if (entry.has_shift)
         {
             add_situation_to_state(entry.shift, new_idx);
             return;
@@ -839,7 +844,7 @@ struct parser
             ++state_count;
         }
         
-        if (entry.has_reduce())
+        if (entry.has_reduce)
         {
             entry.kind = solve_conflict(entry.reduce, s.idx);
         }
@@ -847,7 +852,7 @@ struct parser
         {
             entry.kind = parse_table_entry_kind::shift;
         };
-        entry.shift = size16(new_state_idx);
+        entry.set_shift(size16(new_state_idx));
         add_situation_to_state(new_state_idx, new_idx);
     }
 
@@ -908,9 +913,9 @@ struct parser
                 s << " success \n";
             else if (entry.kind == parse_table_entry_kind::shift)
                 s << " shift to " << entry.shift << "\n";
-            else if (entry.kind == parse_table_entry_kind::reduce && entry.has_shift())
+            else if (entry.kind == parse_table_entry_kind::reduce && entry.has_shift)
                 s << " shift to " << entry.shift << " S/R CONFLICT, prefer reduce(" << rule_infos[entry.reduce].r_idx << ") over shift\n";
-            else if (entry.kind == parse_table_entry_kind::shift && entry.has_reduce())
+            else if (entry.kind == parse_table_entry_kind::shift && entry.has_reduce)
                 s << " shift to " << entry.shift << " S/R CONFLICT, prefer shift over reduce(" << rule_infos[entry.reduce].r_idx << ")\n";
             else if (entry.kind == parse_table_entry_kind::reduce)
                 s << " reduce using (" << rule_infos[entry.reduce].r_idx << ")\n";
@@ -969,7 +974,9 @@ struct parser
         ps.trace_stream << "Reduce using rule " << rule_info_idx << "\n";
         const auto& ri = rule_infos[rule_info_idx];
         ps.cursor_stack.erase(ps.cursor_stack.end() - ri.r_elements, ps.cursor_stack.end());
-        ps.cursor_stack.push_back(parse_table[ps.cursor_stack.back()][ri.l_idx].shift);
+        size new_cursor_value = parse_table[ps.cursor_stack.back()][ri.l_idx].shift;
+        ps.trace_stream << "Go to " << new_cursor_value << "\n";
+        ps.cursor_stack.push_back(new_cursor_value);
     }
 
     template<typename ParserState>
@@ -1053,26 +1060,26 @@ struct parser
         return error ? optional<RootValueType>() : RootValueType{};
     }
     
-    const char* term_names[term_count] = { 0 };
-    const char* nterm_names[nterm_count] = { 0 };
+    const char* term_names[term_count] = { };
+    const char* nterm_names[nterm_count] = { };
     symbol right_sides[rule_count][RuleSize] = { };
-    rule_info rule_infos[rule_count] = { 0 };
-    slice nterm_rule_slices[nterm_count] = { 0 };
-    term_subset situation_first_after[situation_count] = { 0 };
-    bool nterm_empty[nterm_count] = { 0 };
-    term_subset nterm_first[nterm_count] = { 0 };
-    bool nterm_empty_analyzed[nterm_count] = { 0 };
-    bool nterm_first_analyzed[nterm_count] = { 0 };
-    state states[MaxStates] = { 0 };
+    rule_info rule_infos[rule_count] = { };
+    slice nterm_rule_slices[nterm_count] = { };
+    term_subset situation_first_after[situation_count] = { };
+    bool nterm_empty[nterm_count] = { };
+    term_subset nterm_first[nterm_count] = { };
+    bool nterm_empty_analyzed[nterm_count] = { };
+    bool nterm_first_analyzed[nterm_count] = { };
+    state states[MaxStates] = { };
     parse_table_entry parse_table[MaxStates][term_count + nterm_count] = {};
     size state_count = 0;
-    situation_queue_entry situation_queue[MaxStates * situation_count] = { 0 };
+    situation_queue_entry situation_queue[MaxStates * situation_count] = { };
     size situation_queue_size = 0;
-    size term_precedences[term_count] = { 0 }; 
+    size term_precedences[term_count] = { }; 
     associativity term_associativities[term_count] = { associativity::ltor };
-    size rule_precedences[rule_count] = { 0 };
-    size rule_last_terms[rule_count] = { uninitialized };
-    size trivial_term_table[std::numeric_limits<char>::max()] = { uninitialized };
+    size rule_precedences[rule_count] = { };
+    size rule_last_terms[rule_count] = { };
+    size trivial_term_table[std::numeric_limits<char>::max()] = { };
 };
 
 template<typename RootValueType, typename... TermValueType, typename... NTermValueType, typename... Rules, size MaxStates>
