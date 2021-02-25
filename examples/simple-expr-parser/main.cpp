@@ -4,34 +4,32 @@
 
 constexpr nterm<int> expr("expr");
 
-constexpr term<int> one("1");
-constexpr term<int> two("2");
-constexpr term o_plus("+", 1);
+constexpr term o_plus('+', 1);
 constexpr term o_minus("-", 1);
-constexpr term o_mul("*", 2);
-constexpr term o_div("/", 2);
-constexpr term o_or("|", 3);
-constexpr term o_and("&", 4);
-constexpr term o_xor("^", 5);
-constexpr term o_not("!", 6);
+constexpr term o_mul('*', 2);
+constexpr term o_div('/', 2);
+constexpr term o_or('|', 3);
+constexpr term o_and('&', 4);
+constexpr term o_xor('^', 5);
+constexpr term o_not('!', 6);
 
 constexpr parser p(
     expr,
-    make_terms(one, two, o_plus, o_minus, o_mul, o_div, o_or, o_and, o_xor, o_not, "(", ")"),
+    make_terms('1', '2', o_plus, o_minus, o_mul, o_div, o_or, o_and, o_xor, o_not, '(', ')'),
     make_nterms(expr),
     make_rules(
-        expr(expr, "+", expr),
-        expr(expr, "-", expr),
-        expr(expr, "*", expr),
-        expr(expr, "/", expr),
-        expr(expr, "|", expr),
-        expr(expr, "&", expr),
-        expr(expr, "^", expr),
-        expr("-", expr)[6],
-        expr("!", expr),
-        expr("(", expr, ")"),
-        expr("1"),
-        expr("2")
+        expr(expr, '+', expr),
+        expr(expr, '-', expr),
+        expr(expr, '*', expr),
+        expr(expr, '/', expr),
+        expr(expr, '|', expr),
+        expr(expr, '&', expr),
+        expr(expr, '^', expr),
+        expr('-', expr)[6],
+        expr('!', expr),
+        expr('(', expr, ')'),
+        expr('1'),
+        expr('2')
     )
 );
 
