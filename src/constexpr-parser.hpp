@@ -6,6 +6,8 @@
 #include <sstream>
 #include <vector>
 #include <string_view>
+#include <optional>
+#include <variant>
 
 using size = std::uint64_t;
 using size8 = std::uint8_t;
@@ -17,50 +19,49 @@ constexpr size16 uninitialized16 = size16(-1);
 constexpr size32 uninitialized32 = size32(-1);
 
 template<size N>
-using name_table = const char* [N];
+struct cstring_buffer
+{
+    constexpr cstring_buffer(const char(&source)[N])
+    {
+        init(source, std::make_index_sequence<N>{});
+    }
+
+    template<size... I>
+    constexpr auto init(const char(&source)[N], std::index_sequence<I...>)
+    {
+        (void(data[I] = source[I]), ...);
+    }
+
+    struct iterator
+    {
+        const char* ptr;
+
+        constexpr char operator *() { return *ptr; }
+        constexpr iterator& operator ++() { ++ptr; return *this; }
+        constexpr iterator operator ++(int) { iterator i(*this); ++ptr; return i; }
+        constexpr bool operator == (const iterator& other) { return ptr == other.ptr; }
+    };
+
+    constexpr iterator begin() const { return iterator{ data }; }
+    constexpr iterator end() const { return iterator{ data + N - 1 }; }
+
+    char data[N] = { 0 };
+};
 
 template<typename T>
-constexpr size distinct_values_count = 1 << (sizeof(T) * 8);
-
-constexpr int min_char = std::numeric_limits<char>::min();
-
-constexpr size char_to_idx(char c)
+constexpr void destroy(T& ob)
 {
-    return -min_char + c;
+    if constexpr (!std::is_trivially_destructible_v<T>)
+        ob.~T();
 }
-
-template<size S>
-using max_states = std::integral_constant<size, S>;
-
-template<size TermCount, size... RuleSizes>
-constexpr size deduce_max_states = ((0 + ... + (RuleSizes + 1)) + 2) * (TermCount + 1);
-
-template<size S>
-using message_max_size = std::integral_constant<size, S>;
-
-template<typename Buffer>
-struct parse_table_cursor_stack_type
-{
-    using type = std::vector<size>;
-};
-
-template<typename Buffer>
-using parse_table_cursor_stack_type_t = typename parse_table_cursor_stack_type<Buffer>::type;
-
-template<typename Buffer, size MaxValueTypeSize>
-struct parser_value_stack_type
-{
-    using type = std::vector<std::byte>;
-};
-
-template<typename Buffer, size MaxValueTypeSize>
-using parser_value_stack_type_t = typename parser_value_stack_type<Buffer, MaxValueTypeSize>::type;
 
 template<typename T, size N>
 struct cvector
 {
-    constexpr cvector() :
-        data{}, current_size(0)
+    using size_type = size;
+
+    constexpr cvector():
+        the_data{}, current_size(0)
     {}
 
     struct iterator
@@ -68,9 +69,9 @@ struct cvector
         T* ptr;
         constexpr bool operator == (const iterator& other) const { return ptr == other.ptr; }
         constexpr T& operator *() const { return *ptr; }
-        constexpr iterator operator - (size amount) const { return iterator{ ptr - amount }; }
-        constexpr size operator - (const iterator& other) const { return size(ptr - other.ptr); }
-        constexpr iterator operator + (size amount) const { return iterator{ ptr + amount }; }
+        constexpr iterator operator - (size_type amount) const { return iterator{ ptr - amount }; }
+        constexpr size_type operator - (const iterator& other) const { return size_type(ptr - other.ptr); }
+        constexpr iterator operator + (size_type amount) const { return iterator{ ptr + amount }; }
         constexpr iterator operator ++(int) { iterator it{ ptr }; ++ptr; return it; }
         constexpr iterator operator ++() { ++ptr; return *this; }
         constexpr bool operator > (const iterator& other) const { return ptr > other.ptr; }
@@ -91,61 +92,47 @@ struct cvector
         constexpr bool operator < (const const_iterator& other) const { return ptr < other.ptr; }
     };
 
-    constexpr void reserve(size) const {};
-    constexpr void resize(size) const {};
-    constexpr const T& operator[](size idx) const { return data[idx]; }
-    constexpr T& operator[](size idx) { return data[idx]; }
-    constexpr void push_back(const T& v) { data[current_size++] = v; }
-    constexpr void emplace_back(T&& v) { data[current_size++] = std::move(v); }
-    constexpr T& back() { return data[current_size - 1]; }
-    constexpr const T& back() const { return data[current_size - 1]; }
-    constexpr const_iterator begin() const { return iterator{ data }; }
-    constexpr const_iterator end() const { return iterator{ data + N }; }
-    constexpr iterator begin() { return iterator{ data }; }
-    constexpr iterator end() { return iterator{ data + current_size }; }
+    constexpr const T* data() const { return the_data; }
+    constexpr T* data() { return the_data; }
+    constexpr size_type size() const { return current_size; }
+    constexpr void reserve(size_type) const {};
+    constexpr void resize(size_type new_size)
+    {
+        for (; current_size < new_size; ++current_size)
+        {
+            the_data[current_size] = T();
+        }
+    };
+    constexpr const T& operator[](size_type idx) const { return the_data[idx]; }
+    constexpr T& operator[](size_type idx) { return the_data[idx]; }
+    constexpr void push_back(const T& v) { the_data[current_size++] = v; }
+    constexpr void emplace_back(T&& v) { the_data[current_size++] = std::move(v); }
+    constexpr T& back() { return the_data[current_size - 1]; }
+    constexpr const T& back() const { return the_data[current_size - 1]; }
+    constexpr const_iterator begin() const { return iterator{ the_data }; }
+    constexpr const_iterator end() const { return iterator{ the_data + current_size }; }
+    constexpr iterator begin() { return iterator{ the_data }; }
+    constexpr iterator end() { return iterator{ the_data + current_size }; }
     constexpr iterator erase(iterator first, iterator last)
     {
         if (!(first < last))
             return end();
         auto from = first < begin() ? begin() : first;
         auto to = last > end() ? end() : last;
-        current_size -= (to - from);
+        while (!(from == to))
+        {
+            destroy(*from);
+            current_size--;
+        }
         return end();
     }
 
-    T data[N];
-    size current_size;
+    T the_data[N];
+    size_type current_size;
 };
 
 template<size N>
-constexpr size find_name(const name_table<N> &table, const char* name)
-{
-    for (auto i = std::begin(table); i != std::end(table); ++i)
-        if (std::string_view(*i).compare(std::string_view(name)) == 0)
-            return std::distance(std::begin(table), i);
-    return size(-1);
-}
-
-template<typename T>
-struct optional
-{
-    template<typename T1>
-    constexpr optional(T1&& object):
-        object(std::move(object)), has_object(true)
-    {}
-
-    constexpr optional():
-        object(), has_object(false)
-    {}
-
-    constexpr const T& get_object() const
-    {
-        return object;
-    }
-
-    bool has_object = false;
-    T object;
-};
+cstring_buffer(const char(&)[N])->cstring_buffer<N>;
 
 template<typename Container, typename Pred>
 constexpr Container& sort(Container& c, Pred p)
@@ -166,6 +153,70 @@ constexpr Container& sort(Container& c, Pred p)
         }
     }
     return c;
+}
+
+template<size N>
+using name_table = const char* [N];
+
+template<typename T>
+constexpr size distinct_values_count = 1 << (sizeof(T) * 8);
+
+constexpr size char_to_idx(char c)
+{
+    return size(int(c) - std::numeric_limits<char>::min());
+}
+
+constexpr char index_to_char(size idx)
+{
+    return char(int(idx) + std::numeric_limits<char>::min());
+}
+
+template<size S>
+using use_max_states = std::integral_constant<size, S>;
+
+template<size TermCount, size... RuleSizes>
+constexpr size deduce_max_states = ((0 + ... + (RuleSizes + 1)) + 2) * (TermCount + 1);
+
+template<size S>
+using use_message_max_size = std::integral_constant<size, S>;
+
+template<typename Buffer>
+struct parse_table_cursor_stack_type
+{
+    using type = std::vector<size>;
+};
+
+template<size N>
+struct parse_table_cursor_stack_type<cstring_buffer<N>>
+{
+    using type = cvector<size, N>;
+};
+
+template<typename Buffer>
+using parse_table_cursor_stack_type_t = typename parse_table_cursor_stack_type<Buffer>::type;
+
+template<typename Buffer, typename VariantType>
+struct parser_value_stack_type
+{
+    using type = std::vector<VariantType>;
+};
+
+template<size N, typename VariantType>
+struct parser_value_stack_type<cstring_buffer<N>, VariantType>
+{
+    using type = cvector<VariantType, N>;
+};
+
+template<typename Buffer, typename VariantType>
+using parser_value_stack_type_t = typename parser_value_stack_type<Buffer, VariantType>::type;
+
+template<size N>
+constexpr size find_name(const name_table<N> &table, const char* name)
+{
+    for (auto i = std::begin(table); i != std::end(table); ++i)
+        if (std::string_view(*i).compare(std::string_view(name)) == 0)
+            return std::distance(std::begin(table), i);
+    return size(-1);
 }
 
 template<size MaxSize>
@@ -222,35 +273,6 @@ struct is_cstream<cstream<S>>
     static const bool value = true;
 };
 
-template<bool Reverse, typename Seq, std::size_t Sum, size... X>
-struct make_offsets
-{};
-
-template<bool Reverse, std::size_t... I, std::size_t Sum, size First, size... Rest>
-struct make_offsets<Reverse, std::index_sequence<I...>, Sum, First, Rest...>
-{
-    using type = std::conditional_t<
-        Reverse,
-        typename make_offsets<
-        Reverse,
-        std::index_sequence<Sum + First, I...>, Sum + First, Rest...
-        >::type,
-        typename make_offsets<
-        Reverse,
-        std::index_sequence<I..., Sum>, Sum + First, Rest...
-        >::type
-    >;
-};
-
-template<bool Reverse, std::size_t... I, std::size_t Sum>
-struct make_offsets<Reverse, std::index_sequence<I...>, Sum>
-{
-    using type = std::index_sequence<I...>;
-};
-
-template<bool Reverse, size...X>
-using make_offsets_t = typename make_offsets<Reverse, std::index_sequence<>, 0, X...>::type;
-
 template<size First, size... Rest>
 struct max
 {
@@ -266,16 +288,8 @@ struct max<X>
 template<size... X>
 constexpr size max_v = max<X...>::value;
 
-struct no_value {};
-
-template<typename T>
-constexpr size optimized_size = sizeof(T);
-
-template<>
-constexpr size optimized_size<no_value> = 0;
-
 template<typename... T>
-constexpr size optimized_size_sum = (0 + ... + optimized_size<T>);
+constexpr int size_sum = (0 + ... + sizeof(T));
 
 template<typename ValueType>
 struct nterm
@@ -321,6 +335,8 @@ struct move_construct
 template<typename F, typename L, typename...R>
 struct rule
 {
+    using f_type = F;
+
     F f;
     L l;
     std::tuple<R...> r;
@@ -340,6 +356,12 @@ struct rule
     constexpr auto operator[](int precedence)
     {
         return rule<F, L, R...>(std::move(f), l, r, precedence);
+    }
+
+    template<typename F1>
+    constexpr auto operator >= (F1&& f)
+    {
+        return rule<std::decay_t<F1>, L, R...>(std::move(f), l, r, precedence);
     }
 };
 
@@ -383,13 +405,14 @@ constexpr auto fake_root<ValueType>::operator()(Args... args) const
 enum class associativity { ltor, rtol };
 
 using char_2 = char[2];
+
 template<typename Seq>
 constexpr char_2 char_strings_impl[1];
 
-template<int... C>
-constexpr char_2 char_strings_impl<std::integer_sequence<int, C...>>[sizeof...(C)] = { {min_char + C, '\0'} ... };
+template<size... I>
+constexpr char_2 char_strings_impl<std::index_sequence<I...>>[sizeof...(I)] = { {index_to_char(I), '\0'} ... };
 
-constexpr auto& char_strings = char_strings_impl<std::make_integer_sequence<int, distinct_values_count<char>>>;
+constexpr auto& char_strings = char_strings_impl<std::make_index_sequence<distinct_values_count<char>>>;
 
 constexpr const char* char_name(char c)
 {
@@ -486,20 +509,29 @@ struct none_of
     constexpr const char* get_name() const { return name; }
 };
 
-template<typename RootValueType, size TermCount, size NTermCount, size RuleCount, size RuleSize, size MaxValueTypeSize, size MaxStates>
+template<
+    typename RootValueType, 
+    size TermCount, size NTermCount, size RuleCount, 
+    size MaxRuleElementCount, 
+    typename VariantValueType, typename VariantFunctorType, 
+    size MaxStates
+>
 struct parser
 {
+    static const size max_rule_element_count = MaxRuleElementCount;
     static const size term_count = TermCount + 1;
     static const size eof_idx = TermCount;
     static const size nterm_count = NTermCount + 1;
     static const size fake_root_idx = NTermCount;
     static const size rule_count = RuleCount + 1;
-    static const size situation_size = RuleSize + 1;
+    static const size situation_size = max_rule_element_count + 1;
     static const size situation_count = rule_count * situation_size * term_count;
     static const size root_rule_idx = RuleCount;
 
     using term_subset = bool[term_count];
     using state = bool[situation_count];
+    using variant_functor_type = VariantFunctorType;
+    using variant_value_type = VariantValueType;
 
     using root_value_type = RootValueType;
 
@@ -540,8 +572,6 @@ struct parser
         size l_idx;
         size r_idx;
         size r_elements;
-        size l_byte_size;
-        size r_byte_size;
     };
 
     struct situation_queue_entry
@@ -581,7 +611,7 @@ struct parser
             trace_stream(trace_stream)
         {
             cursor_stack.reserve(cursor_stack_initial_capacity);
-            value_stack.reserve(value_stack_initial_capacity * MaxValueTypeSize);
+            value_stack.reserve(value_stack_initial_capacity);
         }
 
         CursorStack& cursor_stack;
@@ -610,13 +640,13 @@ struct parser
         Root root,
         Terms terms,
         NTerms nterms,
-        std::tuple<Rules...> rules)
+        std::tuple<Rules...>&& rules)
     {
         std::apply([this](auto... t) { (void(analyze_term(t)), ...); }, terms);
         analyze_term(eof{});
         std::apply([this](auto... nt) { (void(analyze_nterm(nt)), ...); }, nterms);
         analyze_nterm(fake_root<RootValueType>{});
-        analyze_rules(std::index_sequence_for<Rules...>{}, root, rules);
+        analyze_rules(std::index_sequence_for<Rules...>{}, root, std::move(rules));
         analyze_states();
         
         for (size x : trivial_term_table) 
@@ -724,9 +754,9 @@ struct parser
     constexpr void analyze_rules(
         std::index_sequence<I...>,
         nterm<RootValueType> root,
-        std::tuple<Rules...> rules)
+        std::tuple<Rules...>&& rules)
     {
-        (void(analyze_rule<I>(std::get<I>(rules), std::make_index_sequence<Rules::n>{})), ...);
+        (void(analyze_rule<I>(std::get<I>(std::move(rules)), std::make_index_sequence<Rules::n>{})), ...);
         analyze_rule<root_rule_idx>(fake_root<RootValueType>{}(root), std::index_sequence<0>{});
         sort(rule_infos, [](const auto& ri1, const auto& ri2) { return ri1.l_idx < ri2.l_idx; });
         make_nterm_rule_slices();
@@ -755,14 +785,14 @@ struct parser
     }
 
     template<size Nr, typename F, typename L, typename... R, size... I>
-    constexpr void analyze_rule(rule<F, L, R...> r, std::index_sequence<I...>)
+    constexpr void analyze_rule(rule<F, L, R...>&& r, std::index_sequence<I...>)
     {
         size l_idx = find_name(nterm_names, r.l.get_name());
         (void(right_sides[Nr][I] = make_symbol(std::get<I>(r.r))), ...);
-        constexpr size rule_size = sizeof...(R);
-        rule_infos[Nr] = { l_idx, Nr, rule_size, optimized_size<L>, optimized_size_sum<R...> };
-        rule_last_terms[Nr] = calculate_rule_last_term(Nr, rule_size);
-        rule_precedences[Nr] = calculate_rule_precedence(r.precedence, Nr, rule_size);
+        constexpr size rule_elements_count = sizeof...(R);
+        rule_infos[Nr] = { l_idx, Nr, rule_elements_count };
+        rule_last_terms[Nr] = calculate_rule_last_term(Nr, rule_elements_count);
+        rule_precedences[Nr] = calculate_rule_precedence(r.precedence, Nr, rule_elements_count);
     }
 
     constexpr size make_situation_idx(situation_address a) const
@@ -1088,6 +1118,26 @@ struct parser
         stream << "Lexer error: " << "\n";
     }
 
+    template<typename ParserState>
+    constexpr static void grow_value_stack(ParserState& ps, size diff)
+    {
+        ps.value_stack.resize(ps.value_stack.size() + diff);
+    }
+        
+    template<typename F, typename LValueType, typename... RValueType, size... I>
+    constexpr static void reduce_value_impl(const F& f, variant_value_type* start, std::index_sequence<I...>)
+    {
+        LValueType lvalue(f(std::get<RValueType>(std::move(*(start + I)))...));
+        (void(*(start + I) = variant_value_type()), ...);
+        *(start) = std::move(lvalue);
+    }
+
+    template<typename F, typename LValueType, typename... RValueType>
+    constexpr static void reduce_value(const variant_functor_type& f, variant_value_type* end_of_value_stack)
+    {
+        reduce_value_impl(std::get<F>(f), end_of_value_stack, std::make_index_sequence<sizeof...(RValueType)>{});
+    }
+    
     template<typename Buffer, typename ErrorStream, typename TraceStream>
     constexpr size get_next_term(const Buffer& buffer, typename Buffer::iterator& it, ErrorStream& error_stream, TraceStream& trace_stream) const
     {
@@ -1125,6 +1175,11 @@ struct parser
         size new_cursor_value = parse_table[ps.cursor_stack.back()][ri.l_idx].shift;
         ps.trace_stream << "Go to " << new_cursor_value << "\n";
         ps.cursor_stack.push_back(new_cursor_value);
+
+        variant_value_type* start = ps.value_stack.data() + ps.value_stack.size() - ri.r_elements;
+        if (ri.r_elements == 0)
+            grow_value_stack(ps, 1);
+        value_reductors[ri.r_idx](functors[ri.r_idx], start);
     }
 
     template<typename ParserState>
@@ -1157,7 +1212,7 @@ struct parser
     template<typename Buffer, typename ErrorStream, typename TraceStream>
     constexpr auto parse(const Buffer& buffer, ErrorStream& error_stream, TraceStream& trace_stream) const
     {
-        parser_value_stack_type_t<Buffer, MaxValueTypeSize> value_stack{};
+        parser_value_stack_type_t<Buffer, variant_value_type> value_stack{};
         parse_table_cursor_stack_type_t<Buffer> cursor_stack{};
         parser_state ps(cursor_stack, value_stack, error_stream, trace_stream);
 
@@ -1205,12 +1260,12 @@ struct parser
             }
         }
         
-        return error ? optional<RootValueType>() : RootValueType{};
+        return error ? std::optional<RootValueType>() : RootValueType{};
     }
     
     name_table<term_count> term_names = { };
     name_table<nterm_count> nterm_names = { };
-    symbol right_sides[rule_count][RuleSize] = { };
+    symbol right_sides[rule_count][max_rule_element_count] = { };
     rule_info rule_infos[rule_count] = { };
     slice nterm_rule_slices[nterm_count] = { };
     term_subset situation_first_after[situation_count] = { };
@@ -1229,6 +1284,9 @@ struct parser
     size rule_last_terms[rule_count] = { };
     size trivial_term_table[distinct_values_count<char>] = { };
     bool trivial_lexical_analyzer = true;
+    variant_functor_type functors[rule_count] = {};
+    using value_reductor = void (*)(const variant_functor_type&, variant_value_type*);
+    value_reductor value_reductors[rule_count] = {};
 };
 
 
@@ -1238,7 +1296,7 @@ parser(
     std::tuple<term<TermValueType>...>,
     std::tuple<nterm<NTermValueType>...>,
     std::tuple<Rules...>,
-    std::integral_constant<size, MaxStates>
+    use_max_states<MaxStates>
 ) ->
 parser<
     RootValueType, 
@@ -1246,7 +1304,8 @@ parser<
     sizeof...(NTermValueType), 
     sizeof...(Rules), 
     max_v<Rules::n...>, 
-    max_v<sizeof(TermValueType)..., sizeof(NTermValueType)...>,
+    std::variant<int, TermValueType..., NTermValueType...>,
+    std::variant<typename Rules::f_type...>,
     MaxStates>;
 
 template<typename RootValueType, typename... TermValueType, typename... NTermValueType, typename... Rules>
@@ -1262,7 +1321,8 @@ parser<
     sizeof...(NTermValueType), 
     sizeof...(Rules), 
     max_v<Rules::n...>,
-    max_v<sizeof(TermValueType)..., sizeof(NTermValueType)...>,
+    std::variant<int, TermValueType..., NTermValueType...>,
+    std::variant<typename Rules::f_type...>,
     deduce_max_states<sizeof...(TermValueType), Rules::n...>
 >;
 
@@ -1286,9 +1346,9 @@ constexpr auto make_nterms(NT... nts)
 }
 
 template<typename... Rules>
-constexpr auto make_rules(Rules... rules)
+constexpr auto make_rules(Rules&&... rules)
 {
-    return std::make_tuple(rules...);
+    return std::make_tuple(std::move(rules)...);
 }
 
 struct use_string_stream
@@ -1298,7 +1358,7 @@ template<typename StreamType>
 struct diag_msg
 {
     template<typename Parser, size Size>
-    constexpr diag_msg(const Parser& p, message_max_size<Size>)
+    constexpr diag_msg(const Parser& p, use_message_max_size<Size>)
     {
         p.write_diag_str(stream);
     }
@@ -1318,7 +1378,7 @@ struct diag_msg
 };
 
 template<typename Parser, size Size>
-diag_msg(const Parser&, message_max_size<Size>)->diag_msg<cstream<Size>>;
+diag_msg(const Parser&, use_message_max_size<Size>)->diag_msg<cstream<Size>>;
 
 template<typename Parser>
 diag_msg(const Parser&, use_string_stream)->diag_msg<std::stringstream>;
@@ -1328,15 +1388,15 @@ struct parse_result
 {
     ErrorStreamType error_stream;
     TraceStreamType trace_stream;
-    optional<ValueType> value{};
+    std::optional<ValueType> value{};
 
     template<typename Parser, size ErrorStreamSize, size TraceStreamSize, typename Buffer>
-    constexpr parse_result(const Parser& p, const Buffer& buffer, message_max_size<ErrorStreamSize>, message_max_size<TraceStreamSize>):
+    constexpr parse_result(const Parser& p, const Buffer& buffer, use_message_max_size<ErrorStreamSize>, use_message_max_size<TraceStreamSize>):
         parse_result(p, buffer)
     {}
 
     template<typename Parser, size ErrorStreamSize, typename Buffer>
-    constexpr parse_result(const Parser& p, const Buffer& buffer, message_max_size<ErrorStreamSize>):
+    constexpr parse_result(const Parser& p, const Buffer& buffer, use_message_max_size<ErrorStreamSize>):
         parse_result(p, buffer)
     {}
 
@@ -1370,7 +1430,7 @@ struct no_stream
 };
 
 template<typename Parser, typename Buffer, size ErrorStreamSize, size TraceStreamSize>
-parse_result(const Parser&, const Buffer&, message_max_size<ErrorStreamSize>, message_max_size<TraceStreamSize>)
+parse_result(const Parser&, const Buffer&, use_message_max_size<ErrorStreamSize>, use_message_max_size<TraceStreamSize>)
 ->parse_result<typename Parser::root_value_type, cstream<ErrorStreamSize>, cstream<TraceStreamSize>>;
 
 template<typename Parser, typename Buffer>
@@ -1378,7 +1438,7 @@ parse_result(const Parser&, const Buffer&, use_string_stream, use_string_stream)
 ->parse_result<typename Parser::root_value_type, std::stringstream, std::stringstream>;
 
 template<typename Parser, typename Buffer, size ErrorStreamSize>
-parse_result(const Parser&, const Buffer&, message_max_size<ErrorStreamSize>)
+parse_result(const Parser&, const Buffer&, use_message_max_size<ErrorStreamSize>)
 ->parse_result<typename Parser::root_value_type, cstream<ErrorStreamSize>, no_stream>;
 
 template<typename Parser, typename Buffer>
@@ -1389,47 +1449,4 @@ template<typename Parser, typename Buffer>
 parse_result(const Parser&, const Buffer&)
 ->parse_result<typename Parser::root_value_type, no_stream, no_stream>;
 
-template<size N>
-struct cstring_buffer
-{
-    constexpr cstring_buffer(const char (&source)[N])
-    {
-        init(source, std::make_index_sequence<N>{});
-    }
-    
-    template<size... I>
-    constexpr auto init(const char(&source)[N], std::index_sequence<I...>)
-    {
-        (void(data[I] = source[I]),...);
-    }
 
-    struct iterator
-    {
-        const char* ptr;
-
-        constexpr char operator *() { return *ptr; }
-        constexpr iterator& operator ++() { ++ptr; return *this; }
-        constexpr iterator operator ++(int) { iterator i(*this); ++ptr; return i; }
-        constexpr bool operator == (const iterator& other) { return ptr == other.ptr; }
-    };
-
-    constexpr iterator begin() const { return iterator{ data }; }
-    constexpr iterator end() const { return iterator{ data + N - 1 }; }
-
-    char data[N] = { 0 };
-};
-
-template<size N>
-cstring_buffer(const char(&)[N])->cstring_buffer<N>;
-
-template<size N>
-struct parse_table_cursor_stack_type<cstring_buffer<N>>
-{
-    using type = cvector<size, N>;
-};
-
-template<size N, size MaxValueTypeSize>
-struct parser_value_stack_type<cstring_buffer<N>, MaxValueTypeSize>
-{
-    using type = cvector<std::byte, N * MaxValueTypeSize>;
-};
