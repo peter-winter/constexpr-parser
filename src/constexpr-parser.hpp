@@ -9,16 +9,16 @@
 #include <optional>
 #include <variant>
 
-using size = std::uint64_t;
-using size8 = std::uint8_t;
-using size16 = std::uint16_t;
-using size32 = std::uint32_t;
+using size_t = std::uint64_t;
+using size8_t = std::uint8_t;
+using size16_t = std::uint16_t;
+using size32_t = std::uint32_t;
 
-constexpr size uninitialized = size(-1);
-constexpr size16 uninitialized16 = size16(-1);
-constexpr size32 uninitialized32 = size32(-1);
+constexpr size_t uninitialized = size_t(-1);
+constexpr size16_t uninitialized16 = size16_t(-1);
+constexpr size32_t uninitialized32 = size32_t(-1);
 
-template<size N>
+template<size_t N>
 struct cstring_buffer
 {
     constexpr cstring_buffer(const char(&source)[N])
@@ -26,7 +26,7 @@ struct cstring_buffer
         init(source, std::make_index_sequence<N>{});
     }
 
-    template<size... I>
+    template<size_t... I>
     constexpr auto init(const char(&source)[N], std::index_sequence<I...>)
     {
         (void(data[I] = source[I]), ...);
@@ -48,17 +48,14 @@ struct cstring_buffer
     char data[N] = { 0 };
 };
 
-template<typename T>
-constexpr void destroy(T& ob)
-{
-    if constexpr (!std::is_trivially_destructible_v<T>)
-        ob.~T();
-}
-
-template<typename T, size N>
+template<typename T, size_t N, typename = void>
 struct cvector
+{};
+
+template<typename T, size_t N>
+struct cvector<T, N, std::enable_if_t<std::is_trivial_v<T>>>
 {
-    using size_type = size;
+    using size_type = size_t;
 
     constexpr cvector():
         the_data{}, current_size(0)
@@ -83,9 +80,9 @@ struct cvector
         const T* ptr;
         constexpr bool operator == (const const_iterator& other) const { return ptr == other.ptr; }
         constexpr const T& operator *() const { return *ptr; }
-        constexpr const_iterator operator - (size amount) const { return const_iterator{ ptr - amount }; }
-        constexpr size operator - (const const_iterator& other) const { return size(ptr - other.ptr); }
-        constexpr const_iterator operator + (size amount) const { return const_iterator{ ptr - amount }; }
+        constexpr const_iterator operator - (size_t amount) const { return const_iterator{ ptr - amount }; }
+        constexpr size_t operator - (const const_iterator& other) const { return size_t(ptr - other.ptr); }
+        constexpr const_iterator operator + (size_t amount) const { return const_iterator{ ptr - amount }; }
         constexpr const_iterator operator ++(int) { const_iterator it{ ptr }; ++ptr; return it; }
         constexpr const_iterator operator ++() { ++ptr; return *this; }
         constexpr bool operator > (const const_iterator& other) const { return ptr > other.ptr; }
@@ -119,11 +116,7 @@ struct cvector
             return end();
         auto from = first < begin() ? begin() : first;
         auto to = last > end() ? end() : last;
-        while (!(from == to))
-        {
-            destroy(*from);
-            current_size--;
-        }
+        current_size -= (to - from);
         return end();
     }
 
@@ -131,7 +124,7 @@ struct cvector
     size_type current_size;
 };
 
-template<size N>
+template<size_t N>
 cstring_buffer(const char(&)[N])->cstring_buffer<N>;
 
 template<typename Container, typename Pred>
@@ -155,71 +148,93 @@ constexpr Container& sort(Container& c, Pred p)
     return c;
 }
 
-template<size N>
+template<typename Seq, std::size_t Sum, size_t... X>
+struct make_reverse_offsets
+{};
+
+template<std::size_t... I, std::size_t Sum, size_t First, size_t... Rest>
+struct make_reverse_offsets<std::index_sequence<I...>, Sum, First, Rest...>
+{
+    using type = typename make_reverse_offsets<std::index_sequence<Sum + First, I...>, Sum + First, Rest...>::type;
+};
+
+template<std::size_t... I, std::size_t Sum>
+struct make_reverse_offsets<std::index_sequence<I...>, Sum>
+{
+    using type = std::index_sequence<I...>;
+};
+
+template<size_t...X>
+using make_reverse_offsets_t = typename make_reverse_offsets<std::index_sequence<>, 0, X...>::type;
+
+template<typename... T>
+constexpr int sum_size = (0 + ... + sizeof(T));
+
+template<size_t N>
 using name_table = const char* [N];
 
 template<typename T>
-constexpr size distinct_values_count = 1 << (sizeof(T) * 8);
+constexpr size_t distinct_values_count = 1 << (sizeof(T) * 8);
 
-constexpr size char_to_idx(char c)
+constexpr size_t char_to_idx(char c)
 {
-    return size(int(c) - std::numeric_limits<char>::min());
+    return size_t(int(c) - std::numeric_limits<char>::min());
 }
 
-constexpr char index_to_char(size idx)
+constexpr char index_to_char(size_t idx)
 {
     return char(int(idx) + std::numeric_limits<char>::min());
 }
 
-template<size S>
-using use_max_states = std::integral_constant<size, S>;
+template<size_t S>
+using use_max_states = std::integral_constant<size_t, S>;
 
-template<size TermCount, size... RuleSizes>
-constexpr size deduce_max_states = ((0 + ... + (RuleSizes + 1)) + 2) * (TermCount + 1);
+template<size_t TermCount, size_t... RuleSizes>
+constexpr size_t deduce_max_states = ((0 + ... + (RuleSizes + 1)) + 2) * (TermCount + 1);
 
-template<size S>
-using use_message_max_size = std::integral_constant<size, S>;
+template<size_t S>
+using use_message_max_size = std::integral_constant<size_t, S>;
 
 template<typename Buffer>
 struct parse_table_cursor_stack_type
 {
-    using type = std::vector<size>;
+    using type = std::vector<size_t>;
 };
 
-template<size N>
+template<size_t N>
 struct parse_table_cursor_stack_type<cstring_buffer<N>>
 {
-    using type = cvector<size, N>;
+    using type = cvector<size_t, N>;
 };
 
 template<typename Buffer>
 using parse_table_cursor_stack_type_t = typename parse_table_cursor_stack_type<Buffer>::type;
 
-template<typename Buffer, typename VariantType>
+template<typename Buffer, size_t MaxValueTypeSize>
 struct parser_value_stack_type
 {
-    using type = std::vector<VariantType>;
+    using type = std::vector<std::byte>;
 };
 
-template<size N, typename VariantType>
-struct parser_value_stack_type<cstring_buffer<N>, VariantType>
+template<size_t N, size_t MaxValueTypeSize>
+struct parser_value_stack_type<cstring_buffer<N>, MaxValueTypeSize>
 {
-    using type = cvector<VariantType, N>;
+    using type = cvector<std::byte, N * MaxValueTypeSize>;
 };
 
-template<typename Buffer, typename VariantType>
-using parser_value_stack_type_t = typename parser_value_stack_type<Buffer, VariantType>::type;
+template<typename Buffer, size_t MaxValueTypeSize>
+using parser_value_stack_type_t = typename parser_value_stack_type<Buffer, MaxValueTypeSize>::type;
 
-template<size N>
-constexpr size find_name(const name_table<N> &table, const char* name)
+template<size_t N>
+constexpr size_t find_name(const name_table<N> &table, const char* name)
 {
     for (auto i = std::begin(table); i != std::end(table); ++i)
         if (std::string_view(*i).compare(std::string_view(name)) == 0)
             return std::distance(std::begin(table), i);
-    return size(-1);
+    return size_t(-1);
 }
 
-template<size MaxSize>
+template<size_t MaxSize>
 struct cstream
 {
     constexpr cstream& operator << (const char* source)
@@ -233,7 +248,7 @@ struct cstream
         return *this;
     }
 
-    constexpr cstream& operator << (size x)
+    constexpr cstream& operator << (size_t x)
     {
         if (x == 0u)
         {
@@ -241,7 +256,7 @@ struct cstream
             return *this;
         }
 
-        char digits[std::numeric_limits<size>::digits10] = { 0 };
+        char digits[std::numeric_limits<size_t>::digits10] = { 0 };
         int digit_count = 0;
         while (x)
         {
@@ -258,7 +273,7 @@ struct cstream
     constexpr const char* str() const { return data; }
 
     char data[MaxSize] = { 0 };
-    size current_size = 0;
+    size_t current_size = 0;
 };
 
 template<typename T>
@@ -267,26 +282,26 @@ struct is_cstream
     static const bool value = false;
 };
 
-template<size S>
+template<size_t S>
 struct is_cstream<cstream<S>>
 {
     static const bool value = true;
 };
 
-template<size First, size... Rest>
+template<size_t First, size_t... Rest>
 struct max
 {
-    static const size value = std::max(First, max<Rest...>::value);
+    static const size_t value = std::max(First, max<Rest...>::value);
 };
 
-template<size X>
+template<size_t X>
 struct max<X>
 {
-    static const size value = X;
+    static const size_t value = X;
 };
 
-template<size... X>
-constexpr size max_v = max<X...>::value;
+template<size_t... X>
+constexpr size_t max_v = max<X...>::value;
 
 template<typename... T>
 constexpr int size_sum = (0 + ... + sizeof(T));
@@ -300,7 +315,7 @@ struct nterm
         name(name)
     {}
 
-    constexpr void set_idx(size idx)
+    constexpr void set_idx(size_t idx)
     {
         this->idx = idx;
     }
@@ -310,13 +325,15 @@ struct nterm
     template<typename... Args>
     constexpr auto operator()(Args... args) const;
 
-    size idx = uninitialized;
+    size_t idx = uninitialized;
     const char* name;
 };
 
 template<typename ValueType>
 struct fake_root
 {
+    using value_type = ValueType;
+
     template<typename... Args>
     constexpr auto operator()(Args... args) const;
 
@@ -326,9 +343,9 @@ struct fake_root
 template<typename L, typename...R>
 struct move_construct
 {
-    L operator()(R&&... r)
+    L operator()(R&&... r) const
     {
-        return L(std::move(r));
+        return L(std::move(r)...);
     }
 };
 
@@ -340,7 +357,7 @@ struct rule
     F f;
     L l;
     std::tuple<R...> r;
-    static const size n = sizeof...(R);
+    static const size_t n = sizeof...(R);
     int precedence;
     
     template<typename F1>
@@ -409,7 +426,7 @@ using char_2 = char[2];
 template<typename Seq>
 constexpr char_2 char_strings_impl[1];
 
-template<size... I>
+template<size_t... I>
 constexpr char_2 char_strings_impl<std::index_sequence<I...>>[sizeof...(I)] = { {index_to_char(I), '\0'} ... };
 
 constexpr auto& char_strings = char_strings_impl<std::make_index_sequence<distinct_values_count<char>>>;
@@ -469,14 +486,14 @@ struct term
         idx(uninitialized), data(data.str), precedence(precedence), ass(a), name(name)
     {}
 
-    constexpr void set_idx(size idx)
+    constexpr void set_idx(size_t idx)
     {
         this->idx = idx;
     }
 
     constexpr const char* get_name() const { return name; }
 
-    size idx;
+    size_t idx;
     const char* data;
     int precedence;
     associativity ass;
@@ -493,7 +510,7 @@ struct eof
 
 struct none_of
 {
-    size idx;
+    size_t idx;
     const char* data;
     const char* name;
     
@@ -501,7 +518,7 @@ struct none_of
         data(data), name(name), idx(uninitialized)
     {}
 
-    constexpr void set_idx(size idx)
+    constexpr void set_idx(size_t idx)
     {
         this->idx = idx;
     }
@@ -511,28 +528,27 @@ struct none_of
 
 template<
     typename RootValueType, 
-    size TermCount, size NTermCount, size RuleCount, 
-    size MaxRuleElementCount, 
-    typename VariantValueType, typename VariantFunctorType, 
-    size MaxStates
+    size_t TermCount, size_t NTermCount, size_t RuleCount, 
+    size_t MaxRuleElementCount, 
+    size_t MaxValueTypeSize,
+    typename FunctorTupleType,
+    size_t MaxStates
 >
 struct parser
 {
-    static const size max_rule_element_count = MaxRuleElementCount;
-    static const size term_count = TermCount + 1;
-    static const size eof_idx = TermCount;
-    static const size nterm_count = NTermCount + 1;
-    static const size fake_root_idx = NTermCount;
-    static const size rule_count = RuleCount + 1;
-    static const size situation_size = max_rule_element_count + 1;
-    static const size situation_count = rule_count * situation_size * term_count;
-    static const size root_rule_idx = RuleCount;
+    static const size_t max_rule_element_count = MaxRuleElementCount;
+    static const size_t term_count = TermCount + 1;
+    static const size_t eof_idx = TermCount;
+    static const size_t nterm_count = NTermCount + 1;
+    static const size_t fake_root_idx = NTermCount;
+    static const size_t rule_count = RuleCount + 1;
+    static const size_t situation_size = max_rule_element_count + 1;
+    static const size_t situation_count = rule_count * situation_size * term_count;
+    static const size_t root_rule_idx = RuleCount;
 
+    using functor_tuple_type = FunctorTupleType;
     using term_subset = bool[term_count];
     using state = bool[situation_count];
-    using variant_functor_type = VariantFunctorType;
-    using variant_value_type = VariantValueType;
-
     using root_value_type = RootValueType;
 
     struct symbol
@@ -541,61 +557,62 @@ struct parser
             term(false), idx(uninitialized)
         {}
 
-        constexpr symbol(bool term, size idx):
+        constexpr symbol(bool term, size_t idx):
             term(term), idx(idx)
         {}
 
-        constexpr size get_parse_table_idx() const
+        constexpr size_t get_parse_table_idx() const
         {
             return parser::get_parse_table_idx(term, idx);
         }
 
         bool term;
-        size idx;
+        size_t idx;
     };
 
     struct situation_address
     {
-        size rule_info_idx;
-        size after;
-        size t;
+        size_t rule_info_idx;
+        size_t after;
+        size_t t;
     };
 
     struct slice
     {
-        size start;
-        size n;
+        size_t start;
+        size_t n;
     };
 
     struct rule_info
     {
-        size l_idx;
-        size r_idx;
-        size r_elements;
+        size_t l_idx;
+        size_t r_idx;
+        size_t r_elements;
+        size_t rl_byte_size_diff;
     };
 
     struct situation_queue_entry
     {
-        size state_idx;
-        size idx;
+        size_t state_idx;
+        size_t idx;
     };
 
-    enum class parse_table_entry_kind : size16 { error, success, shift, reduce, rr_conflict };
+    enum class parse_table_entry_kind : size16_t { error, success, shift, reduce, rr_conflict };
 
     struct parse_table_entry
     {
         parse_table_entry_kind kind;
-        size16 shift;
-        size16 reduce;
-        size8 has_shift;
-        size8 has_reduce;
+        size16_t shift;
+        size16_t reduce;
+        size8_t has_shift;
+        size8_t has_reduce;
 
-        constexpr void set_shift(size16 value) { shift = value; has_shift = 1; }
-        constexpr void set_reduce(size16 value) { reduce = value; has_reduce = 1; }
+        constexpr void set_shift(size16_t value) { shift = value; has_shift = 1; }
+        constexpr void set_reduce(size16_t value) { reduce = value; has_reduce = 1; }
     };
 
-    static const size value_stack_initial_capacity = 1 << 10;
-    static const size cursor_stack_initial_capacity = 1 << 10;
+    static const size_t value_stack_initial_capacity = 1 << 10;
+    static const size_t cursor_stack_initial_capacity = 1 << 10;
         
     template<typename CursorStack, typename ValueStack, typename ErrorStream, typename TraceStream>
     struct parser_state
@@ -620,7 +637,7 @@ struct parser
         TraceStream& trace_stream;
     };
 
-    constexpr static size get_parse_table_idx(bool term, size idx)
+    constexpr static size_t get_parse_table_idx(bool term, size_t idx)
     {
         return term ? nterm_count + idx : idx;
     }
@@ -640,7 +657,8 @@ struct parser
         Root root,
         Terms terms,
         NTerms nterms,
-        std::tuple<Rules...>&& rules)
+        std::tuple<Rules...>&& rules):
+        functor_tuple(make_functors_tuple(std::move(rules), std::index_sequence_for<Rules...>{}))
     {
         std::apply([this](auto... t) { (void(analyze_term(t)), ...); }, terms);
         analyze_term(eof{});
@@ -649,14 +667,20 @@ struct parser
         analyze_rules(std::index_sequence_for<Rules...>{}, root, std::move(rules));
         analyze_states();
         
-        for (size x : trivial_term_table) 
+        for (size_t x : trivial_term_table) 
             x = uninitialized;
+    }
+
+    template<typename... Rules, size_t... I>
+    constexpr auto make_functors_tuple(std::tuple<Rules...>&& rules, std::index_sequence<I...>)
+    {
+        return std::make_tuple(std::move(std::get<I>(rules).f)...);
     }
 
     constexpr void make_nterm_rule_slices()
     {
-        size nt = 0;
-        for (size i = 0u; i < rule_count; ++i)
+        size_t nt = 0;
+        for (size_t i = 0u; i < rule_count; ++i)
         {
             if (nt != rule_infos[i].l_idx)
             {
@@ -750,7 +774,7 @@ struct parser
         return symbol{ true, find_name(term_names, char_name(c)) };
     }
 
-    template<typename... Rules, size... I>
+    template<typename... Rules, size_t... I>
     constexpr void analyze_rules(
         std::index_sequence<I...>,
         nterm<RootValueType> root,
@@ -762,7 +786,7 @@ struct parser
         make_nterm_rule_slices();
     }
 
-    constexpr size calculate_rule_last_term(size rule_idx, size rule_size) const
+    constexpr size_t calculate_rule_last_term(size_t rule_idx, size_t rule_size) const
     {
         for (int i = int(rule_size - 1); i >= 0; --i)
         {
@@ -774,50 +798,56 @@ struct parser
         return uninitialized;
     }
 
-    constexpr int calculate_rule_precedence(int precedence, size rule_idx, size rule_size) const
+    constexpr int calculate_rule_precedence(int precedence, size_t rule_idx, size_t rule_size) const
     {
         if (precedence != 0)
             return precedence;
-        size last_term_idx = rule_last_terms[rule_idx];
+        size_t last_term_idx = rule_last_terms[rule_idx];
         if (last_term_idx != uninitialized)
             return term_precedences[last_term_idx];
         return 0;
     }
 
-    template<size Nr, typename F, typename L, typename... R, size... I>
+    template<size_t Nr, typename F, typename L, typename... R, size_t... I>
     constexpr void analyze_rule(rule<F, L, R...>&& r, std::index_sequence<I...>)
     {
-        size l_idx = find_name(nterm_names, r.l.get_name());
+        size_t l_idx = find_name(nterm_names, r.l.get_name());
         (void(right_sides[Nr][I] = make_symbol(std::get<I>(r.r))), ...);
-        constexpr size rule_elements_count = sizeof...(R);
-        rule_infos[Nr] = { l_idx, Nr, rule_elements_count };
+        constexpr size_t rule_elements_count = sizeof...(R);
+        int rl_byte_size_diff = int(sizeof(value_type_t<L>)) - sum_size<value_type_t<R>...>;
+        rule_infos[Nr] = { l_idx, Nr, rule_elements_count, size_t(std::max(rl_byte_size_diff, 0)) };
         rule_last_terms[Nr] = calculate_rule_last_term(Nr, rule_elements_count);
         rule_precedences[Nr] = calculate_rule_precedence(r.precedence, Nr, rule_elements_count);
+        if constexpr (Nr != root_rule_idx)
+        {
+            functor_ptrs[Nr] = (void*)(&std::get<Nr>(functor_tuple));
+            value_reductors[Nr] = &reduce_value<F, value_type_t<L>, value_type_t<R>...>;
+        }
     }
 
-    constexpr size make_situation_idx(situation_address a) const
+    constexpr size_t make_situation_idx(situation_address a) const
     {
         return a.rule_info_idx * situation_size * term_count + a.after * term_count + a.t;
     }
 
-    constexpr situation_address make_situation_address(size idx) const
+    constexpr situation_address make_situation_address(size_t idx) const
     {
-        size t = idx % term_count;
+        size_t t = idx % term_count;
         idx /= term_count;
-        size after = idx % situation_size;
-        size rule_info_idx = idx / situation_size;
+        size_t after = idx % situation_size;
+        size_t rule_info_idx = idx / situation_size;
         return situation_address{ rule_info_idx, after, t };
     }
 
     constexpr void add_term_subset(term_subset& dest, const term_subset& source)
     {
-        for (size i = 0u; i < term_count; ++i)
+        for (size_t i = 0u; i < term_count; ++i)
             dest[i] = dest[i] || source[i];
     }
 
-    constexpr const term_subset& make_right_side_slice_first(const rule_info& ri, size start, term_subset& res)
+    constexpr const term_subset& make_right_side_slice_first(const rule_info& ri, size_t start, term_subset& res)
     {
-        for (size i = start; i < ri.r_elements; ++i)
+        for (size_t i = start; i < ri.r_elements; ++i)
         {
             const symbol& s = right_sides[ri.r_idx][i];
             if (s.term)
@@ -832,14 +862,14 @@ struct parser
         return res;
     }
 
-    constexpr const term_subset& make_nterm_first(size nt)
+    constexpr const term_subset& make_nterm_first(size_t nt)
     {
         if (nterm_first_analyzed[nt])
             return nterm_first[nt];
         nterm_first_analyzed[nt] = true;
 
         const slice& s = nterm_rule_slices[nt];
-        for (size i = 0u; i < s.n; ++i)
+        for (size_t i = 0u; i < s.n; ++i)
         {
             const rule_info& ri = rule_infos[s.start + i];
             make_right_side_slice_first(ri, 0, nterm_first[nt]);
@@ -847,9 +877,9 @@ struct parser
         return nterm_first[nt];
     }
 
-    constexpr bool is_right_side_slice_empty(const rule_info& ri, size start)
+    constexpr bool is_right_side_slice_empty(const rule_info& ri, size_t start)
     {
-        for (size i = start; i < ri.r_elements; ++i)
+        for (size_t i = start; i < ri.r_elements; ++i)
         {
             const symbol& s = right_sides[ri.r_idx][i];
             if (s.term)
@@ -865,14 +895,14 @@ struct parser
         return is_right_side_slice_empty(ri, 0);
     }
 
-    constexpr bool make_nterm_empty(size nt)
+    constexpr bool make_nterm_empty(size_t nt)
     {
         if (nterm_empty_analyzed[nt])
             return nterm_empty[nt];
         nterm_empty_analyzed[nt] = true;
 
         const slice& s = nterm_rule_slices[nt];
-        for (size i = 0u; i < s.n; ++i)
+        for (size_t i = 0u; i < s.n; ++i)
         {
             if (is_right_side_empty(rule_infos[s.start + i]))
             {
@@ -882,7 +912,7 @@ struct parser
         return (nterm_empty[nt] = false);
     }
 
-    constexpr const term_subset& make_situation_first_after(const situation_address& addr, size idx)
+    constexpr const term_subset& make_situation_first_after(const situation_address& addr, size_t idx)
     {
         const rule_info& ri = rule_infos[addr.rule_info_idx];
         make_right_side_slice_first(ri, addr.after + 1, situation_first_after[idx]);
@@ -895,11 +925,11 @@ struct parser
     constexpr void analyze_states()
     {
         situation_address root_situation_address{ root_rule_idx, 0, eof_idx };
-        size idx = make_situation_idx(root_situation_address);
+        size_t idx = make_situation_idx(root_situation_address);
         state_count = 1;
         add_situation_to_state(0, idx);
 
-        size n = 0;
+        size_t n = 0;
         while (n != situation_queue_size)
         {
             analyze_situation(situation_queue[n].state_idx, situation_queue[n].idx);
@@ -907,13 +937,13 @@ struct parser
         }
     }
 
-    constexpr void analyze_situation(size state_idx, size idx)
+    constexpr void analyze_situation(size_t state_idx, size_t idx)
     {
         situation_closure(state_idx, idx);
         situation_transition(state_idx, idx);
     }
 
-    constexpr void add_situation_to_state(size state_idx, size idx)
+    constexpr void add_situation_to_state(size_t state_idx, size_t idx)
     {
         bool& b = states[state_idx][idx];
         if (!b)
@@ -923,7 +953,7 @@ struct parser
         }
     }
 
-    constexpr void situation_closure(size state_idx, size idx)
+    constexpr void situation_closure(size_t state_idx, size_t idx)
     {
         situation_address addr = make_situation_address(idx);
         const rule_info& ri = rule_infos[addr.rule_info_idx];
@@ -933,16 +963,16 @@ struct parser
         const symbol& s = right_sides[ri.r_idx][addr.after];
         if (!s.term)
         {
-            size nt = s.idx;
+            size_t nt = s.idx;
             const term_subset& first = make_situation_first_after(addr, idx);
             const slice& s = nterm_rule_slices[nt];
             for (auto i = 0u; i < s.n; ++i)
             {
-                for (size t = 0; t < term_count; ++t)
+                for (size_t t = 0; t < term_count; ++t)
                 {
                     if (first[t])
                     {
-                        size new_s_idx = make_situation_idx(situation_address{ s.start + i, 0, t });
+                        size_t new_s_idx = make_situation_idx(situation_address{ s.start + i, 0, t });
                         add_situation_to_state(state_idx, new_s_idx);
                     }
                 }
@@ -950,9 +980,9 @@ struct parser
         }
     }
 
-    constexpr auto solve_conflict(size rule_info_idx, size term_idx) const
+    constexpr auto solve_conflict(size_t rule_info_idx, size_t term_idx) const
     {
-        size rule_idx = rule_infos[rule_info_idx].r_idx;
+        size_t rule_idx = rule_infos[rule_info_idx].r_idx;
         int r_p = rule_precedences[rule_idx];
         int t_p = term_precedences[term_idx];
         if (r_p > t_p)
@@ -960,21 +990,21 @@ struct parser
 
         if (r_p == t_p && term_associativities[term_idx] == associativity::ltor)
         {
-            size last_term_idx = rule_last_terms[rule_idx];
+            size_t last_term_idx = rule_last_terms[rule_idx];
             if (last_term_idx == term_idx)
                 return parse_table_entry_kind::reduce;
         }
         return parse_table_entry_kind::shift;
     }
 
-    constexpr void situation_transition(size state_idx, size idx)
+    constexpr void situation_transition(size_t state_idx, size_t idx)
     {
         situation_address addr = make_situation_address(idx);
         const rule_info& ri = rule_infos[addr.rule_info_idx];
         bool reduction = addr.after >= ri.r_elements;
 
         const auto& s = right_sides[ri.r_idx][addr.after];
-        size symbol_idx = reduction ? get_parse_table_idx(true, addr.t) : s.get_parse_table_idx();
+        size_t symbol_idx = reduction ? get_parse_table_idx(true, addr.t) : s.get_parse_table_idx();
         auto& entry = parse_table[state_idx][symbol_idx];
         if (reduction)
         {
@@ -994,12 +1024,12 @@ struct parser
             {
                 entry.kind = parse_table_entry_kind::reduce;
             }
-            entry.set_reduce(size16(addr.rule_info_idx));
+            entry.set_reduce(size16_t(addr.rule_info_idx));
             return;
         }
 
         situation_address new_addr = situation_address{ addr.rule_info_idx, addr.after + 1, addr.t };
-        size new_idx = make_situation_idx(new_addr);
+        size_t new_idx = make_situation_idx(new_addr);
 
         if (entry.has_shift)
         {
@@ -1007,8 +1037,8 @@ struct parser
             return;
         }
 
-        size new_state_idx = uninitialized;
-        for (size i = 0; i < state_count; ++i)
+        size_t new_state_idx = uninitialized;
+        for (size_t i = 0; i < state_count; ++i)
         {
             if (states[i][new_idx])
             {
@@ -1030,7 +1060,7 @@ struct parser
         {
             entry.kind = parse_table_entry_kind::shift;
         };
-        entry.set_shift(size16(new_state_idx));
+        entry.set_shift(size16_t(new_state_idx));
         add_situation_to_state(new_state_idx, new_idx);
     }
 
@@ -1040,17 +1070,17 @@ struct parser
     }
 
     template<typename Stream>
-    constexpr void write_situation_diag_str(Stream& s, size idx) const
+    constexpr void write_situation_diag_str(Stream& s, size_t idx) const
     {
         const situation_address addr = make_situation_address(idx);
         const rule_info& ri = rule_infos[addr.rule_info_idx];
         s << nterm_names[ri.l_idx] << " <- ";
-        for (size i = 0u; i < addr.after; ++i)
+        for (size_t i = 0u; i < addr.after; ++i)
         {
             s << get_symbol_name(right_sides[ri.r_idx][i]) << " ";
         }
         s << ". ";
-        for (size i = addr.after; i < ri.r_elements; ++i)
+        for (size_t i = addr.after; i < ri.r_elements; ++i)
         {
             s << get_symbol_name(right_sides[ri.r_idx][i]) << " ";
         }
@@ -1058,11 +1088,11 @@ struct parser
     }
 
     template<typename Stream>
-    constexpr void write_state_diag_str(Stream& s, size idx) const
+    constexpr void write_state_diag_str(Stream& s, size_t idx) const
     {
         s << "STATE " << idx << "\n";
 
-        for (size i = 0u; i < situation_count; ++i)
+        for (size_t i = 0u; i < situation_count; ++i)
         {
             if (states[idx][i])
             {
@@ -1073,19 +1103,19 @@ struct parser
 
         s << "\n";
 
-        for (size i = 0; i < nterm_count; ++i)
+        for (size_t i = 0; i < nterm_count; ++i)
         {
             const auto& entry = parse_table[idx][i];
             if (entry.kind == parse_table_entry_kind::shift)
                 s << "On " << nterm_names[i] << " go to " << entry.shift << "\n";
         }
-        for (size i = nterm_count; i < nterm_count + term_count; ++i)
+        for (size_t i = nterm_count; i < nterm_count + term_count; ++i)
         {
             const auto& entry = parse_table[idx][i];
             if (entry.kind == parse_table_entry_kind::error)
                 continue;
 
-            size term_idx = i - nterm_count;            
+            size_t term_idx = i - nterm_count;            
             s << "On " << term_names[term_idx];
             if (entry.kind == parse_table_entry_kind::success)
                 s << " success \n";
@@ -1105,7 +1135,7 @@ struct parser
     template<typename Stream>
     constexpr void write_diag_str(Stream& s) const
     {
-        for (size i = 0; i < state_count; ++i)
+        for (size_t i = 0; i < state_count; ++i)
         {
             write_state_diag_str(s, i);
             s << "\n";
@@ -1119,29 +1149,31 @@ struct parser
     }
 
     template<typename ParserState>
-    constexpr static void grow_value_stack(ParserState& ps, size diff)
+    constexpr static void grow_value_stack(ParserState& ps, size_t diff)
     {
-        ps.value_stack.resize(ps.value_stack.size() + diff);
+        if (diff != 0)
+            ps.value_stack.resize(ps.value_stack.size() + diff);
     }
         
-    template<typename F, typename LValueType, typename... RValueType, size... I>
-    constexpr static void reduce_value_impl(const F& f, variant_value_type* start, std::index_sequence<I...>)
+    template<typename F, typename LValueType, typename... RValueType, size_t... I>
+    constexpr static void reduce_value_impl(const F& f, std::byte* end_of_value_stack, std::index_sequence<I...>)
     {
-        LValueType lvalue(f(std::get<RValueType>(std::move(*(start + I)))...));
-        (void(*(start + I) = variant_value_type()), ...);
-        *(start) = std::move(lvalue);
+        //LValueType lvalue(f(std::move(*reinterpret_cast<RValueType*>(end_of_value_stack - I))...));        
     }
 
     template<typename F, typename LValueType, typename... RValueType>
-    constexpr static void reduce_value(const variant_functor_type& f, variant_value_type* end_of_value_stack)
+    constexpr static void reduce_value(const void* f_ptr, std::byte* end_of_value_stack)
     {
-        reduce_value_impl(std::get<F>(f), end_of_value_stack, std::make_index_sequence<sizeof...(RValueType)>{});
+        reduce_value_impl<F, LValueType, RValueType...>(
+            *static_cast<const F*>(f_ptr), 
+            end_of_value_stack, 
+            make_reverse_offsets_t<sizeof(RValueType)...>{});
     }
     
     template<typename Buffer, typename ErrorStream, typename TraceStream>
-    constexpr size get_next_term(const Buffer& buffer, typename Buffer::iterator& it, ErrorStream& error_stream, TraceStream& trace_stream) const
+    constexpr size_t get_next_term(const Buffer& buffer, typename Buffer::iterator& it, ErrorStream& error_stream, TraceStream& trace_stream) const
     {
-        size res = uninitialized;
+        size_t res = uninitialized;
         if (it == buffer.end())
         {
             res = eof_idx;
@@ -1160,37 +1192,36 @@ struct parser
     }
 
     template<typename ParserState>
-    constexpr void shift(ParserState& ps, size new_cursor_value) const
+    constexpr void shift(ParserState& ps, size_t new_cursor_value) const
     {
         ps.trace_stream << "Shift to " << new_cursor_value << "\n";
         ps.cursor_stack.push_back(new_cursor_value);
     }
 
     template<typename ParserState>
-    constexpr void reduce(ParserState& ps, size rule_info_idx) const
+    constexpr void reduce(ParserState& ps, size_t rule_info_idx) const
     {
         ps.trace_stream << "Reduce using rule " << rule_info_idx << "\n";
         const auto& ri = rule_infos[rule_info_idx];
         ps.cursor_stack.erase(ps.cursor_stack.end() - ri.r_elements, ps.cursor_stack.end());
-        size new_cursor_value = parse_table[ps.cursor_stack.back()][ri.l_idx].shift;
+        size_t new_cursor_value = parse_table[ps.cursor_stack.back()][ri.l_idx].shift;
         ps.trace_stream << "Go to " << new_cursor_value << "\n";
         ps.cursor_stack.push_back(new_cursor_value);
 
-        variant_value_type* start = ps.value_stack.data() + ps.value_stack.size() - ri.r_elements;
-        if (ri.r_elements == 0)
-            grow_value_stack(ps, 1);
-        value_reductors[ri.r_idx](functors[ri.r_idx], start);
+        std::byte* end_of_value_stack = ps.value_stack.data() + ps.value_stack.size();
+        grow_value_stack(ps, ri.rl_byte_size_diff);
+        value_reductors[ri.r_idx](functor_ptrs[ri.r_idx], end_of_value_stack);
     }
 
     template<typename ParserState>
-    constexpr void rr_conflict(ParserState& ps, size rule_idx) const
+    constexpr void rr_conflict(ParserState& ps, size_t rule_idx) const
     {
         ps.trace_stream << "R/R conflict encountered \n";
         reduce(ps, rule_idx);
     }
 
     template<typename Stream>
-    constexpr void write_syntax_error_to_stream(size parse_table_cursor, Stream& stream) const
+    constexpr void write_syntax_error_to_stream(size_t parse_table_cursor, Stream& stream) const
     {
         stream << "Syntax error: " << "\n";
     }
@@ -1198,7 +1229,7 @@ struct parser
     template<typename ParserState>
     constexpr void syntax_error(ParserState& ps) const
     {
-        size cursor = ps.cursor_stack.back();
+        size_t cursor = ps.cursor_stack.back();
         write_syntax_error_to_stream(cursor, ps.error_stream);
         write_syntax_error_to_stream(cursor, ps.trace_stream);
     }
@@ -1212,7 +1243,7 @@ struct parser
     template<typename Buffer, typename ErrorStream, typename TraceStream>
     constexpr auto parse(const Buffer& buffer, ErrorStream& error_stream, TraceStream& trace_stream) const
     {
-        parser_value_stack_type_t<Buffer, variant_value_type> value_stack{};
+        parser_value_stack_type_t<Buffer, MaxValueTypeSize> value_stack{};
         parse_table_cursor_stack_type_t<Buffer> cursor_stack{};
         parser_state ps(cursor_stack, value_stack, error_stream, trace_stream);
 
@@ -1220,12 +1251,12 @@ struct parser
         typename Buffer::iterator it = buffer.begin();
 
         ps.cursor_stack.push_back(0);
-        size term_idx = uninitialized;
+        size_t term_idx = uninitialized;
         bool next_term_needed = true;
 
         while (true)
         {
-            size cursor = ps.cursor_stack.back();
+            size_t cursor = ps.cursor_stack.back();
             if (next_term_needed)
             {
                 term_idx = get_next_term(buffer, it, error_stream, trace_stream);
@@ -1275,22 +1306,23 @@ struct parser
     bool nterm_first_analyzed[nterm_count] = { };
     state states[MaxStates] = { };
     parse_table_entry parse_table[MaxStates][term_count + nterm_count] = {};
-    size state_count = 0;
+    size_t state_count = 0;
     situation_queue_entry situation_queue[MaxStates * situation_count] = { };
-    size situation_queue_size = 0;
+    size_t situation_queue_size = 0;
     int term_precedences[term_count] = { }; 
     associativity term_associativities[term_count] = { associativity::ltor };
     int rule_precedences[rule_count] = { };
-    size rule_last_terms[rule_count] = { };
-    size trivial_term_table[distinct_values_count<char>] = { };
+    size_t rule_last_terms[rule_count] = { };
+    size_t trivial_term_table[distinct_values_count<char>] = { };
     bool trivial_lexical_analyzer = true;
-    variant_functor_type functors[rule_count] = {};
-    using value_reductor = void (*)(const variant_functor_type&, variant_value_type*);
+    void* functor_ptrs[rule_count] = {};
+    functor_tuple_type functor_tuple;
+    using value_reductor = void (*)(const void*, std::byte*);
     value_reductor value_reductors[rule_count] = {};
 };
 
 
-template<typename RootValueType, typename... TermValueType, typename... NTermValueType, typename... Rules, size MaxStates>
+template<typename RootValueType, typename... TermValueType, typename... NTermValueType, typename... Rules, size_t MaxStates>
 parser(
     nterm<RootValueType>,
     std::tuple<term<TermValueType>...>,
@@ -1304,8 +1336,8 @@ parser<
     sizeof...(NTermValueType), 
     sizeof...(Rules), 
     max_v<Rules::n...>, 
-    std::variant<int, TermValueType..., NTermValueType...>,
-    std::variant<typename Rules::f_type...>,
+    max_v<sizeof(TermValueType)..., sizeof(NTermValueType)...>,
+    std::tuple<typename Rules::f_type...>,
     MaxStates>;
 
 template<typename RootValueType, typename... TermValueType, typename... NTermValueType, typename... Rules>
@@ -1321,12 +1353,12 @@ parser<
     sizeof...(NTermValueType), 
     sizeof...(Rules), 
     max_v<Rules::n...>,
-    std::variant<int, TermValueType..., NTermValueType...>,
-    std::variant<typename Rules::f_type...>,
+    max_v<sizeof(TermValueType)..., sizeof(NTermValueType)...>,
+    std::tuple<typename Rules::f_type...>,
     deduce_max_states<sizeof...(TermValueType), Rules::n...>
 >;
 
-template<typename... S, size... I>
+template<typename... S, size_t... I>
 constexpr auto make_symbols_impl(std::index_sequence<I...>, S... s)
 {
     (void(s.set_idx(I)), ...);
@@ -1357,8 +1389,8 @@ struct use_string_stream
 template<typename StreamType>
 struct diag_msg
 {
-    template<typename Parser, size Size>
-    constexpr diag_msg(const Parser& p, use_message_max_size<Size>)
+    template<typename Parser, size_t size_t>
+    constexpr diag_msg(const Parser& p, use_message_max_size<size_t>)
     {
         p.write_diag_str(stream);
     }
@@ -1377,7 +1409,7 @@ struct diag_msg
     StreamType stream;
 };
 
-template<typename Parser, size Size>
+template<typename Parser, size_t Size>
 diag_msg(const Parser&, use_message_max_size<Size>)->diag_msg<cstream<Size>>;
 
 template<typename Parser>
@@ -1390,12 +1422,12 @@ struct parse_result
     TraceStreamType trace_stream;
     std::optional<ValueType> value{};
 
-    template<typename Parser, size ErrorStreamSize, size TraceStreamSize, typename Buffer>
+    template<typename Parser, size_t ErrorStreamSize, size_t TraceStreamSize, typename Buffer>
     constexpr parse_result(const Parser& p, const Buffer& buffer, use_message_max_size<ErrorStreamSize>, use_message_max_size<TraceStreamSize>):
         parse_result(p, buffer)
     {}
 
-    template<typename Parser, size ErrorStreamSize, typename Buffer>
+    template<typename Parser, size_t ErrorStreamSize, typename Buffer>
     constexpr parse_result(const Parser& p, const Buffer& buffer, use_message_max_size<ErrorStreamSize>):
         parse_result(p, buffer)
     {}
@@ -1429,7 +1461,7 @@ struct no_stream
     constexpr const no_stream& operator <<(T&&) const { return *this; }
 };
 
-template<typename Parser, typename Buffer, size ErrorStreamSize, size TraceStreamSize>
+template<typename Parser, typename Buffer, size_t ErrorStreamSize, size_t TraceStreamSize>
 parse_result(const Parser&, const Buffer&, use_message_max_size<ErrorStreamSize>, use_message_max_size<TraceStreamSize>)
 ->parse_result<typename Parser::root_value_type, cstream<ErrorStreamSize>, cstream<TraceStreamSize>>;
 
@@ -1437,7 +1469,7 @@ template<typename Parser, typename Buffer>
 parse_result(const Parser&, const Buffer&, use_string_stream, use_string_stream)
 ->parse_result<typename Parser::root_value_type, std::stringstream, std::stringstream>;
 
-template<typename Parser, typename Buffer, size ErrorStreamSize>
+template<typename Parser, typename Buffer, size_t ErrorStreamSize>
 parse_result(const Parser&, const Buffer&, use_message_max_size<ErrorStreamSize>)
 ->parse_result<typename Parser::root_value_type, cstream<ErrorStreamSize>, no_stream>;
 

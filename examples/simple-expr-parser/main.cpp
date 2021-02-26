@@ -55,7 +55,7 @@ constexpr term o_and('&', 4);
 constexpr term o_xor('^', 5);
 constexpr term o_neg('~', 6);
 
-parser p(
+constexpr parser p(
     expr,
     make_terms('1', '2', o_plus, o_minus, o_mul, o_div, o_or, o_and, o_xor, o_neg, '(', ')'),
     make_nterms(expr),
@@ -77,7 +77,7 @@ parser p(
 
 //diag_msg msg(p, use_string_stream{});
 
-parse_result res(p, cstring_buffer("1+1"), use_message_max_size<1000>{}, use_message_max_size<1000>{});
+constexpr parse_result res(p, cstring_buffer("1+1"), use_message_max_size<1000>{}, use_message_max_size<1000>{});
 //parse_result res(p, cstring_buffer("1+1"), use_string_stream{}, use_string_stream{});
 
 int main()
