@@ -79,6 +79,7 @@ constexpr parser p(
 
 constexpr parse_result res(p, cstring_buffer("1+1"), use_message_max_size<1000>{}, use_message_max_size<1000>{});
 //parse_result res(p, cstring_buffer("1+1"), use_string_stream{}, use_string_stream{});
+constexpr auto v = res.get_value();
 
 int main()
 {
@@ -86,7 +87,6 @@ int main()
 
     //std::cout << res.get_error_stream().str();
     std::cout << res.get_trace_stream().str();
-    //std::cout << res.get_value();
-    return 0;
+    std::cout << v;
 }
 
