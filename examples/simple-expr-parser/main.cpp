@@ -1,12 +1,19 @@
-
-#include <iostream>
 #include "constexpr-parser.hpp"
+#include <iostream>
+
+struct cc
+{
+    constexpr void yo() { ++x; }
+
+    int x = 0;
+};
 
 struct binary_op
 {
-    constexpr int operator()(int x1, char op, int x2) const
-    { 
-        switch (op)
+    constexpr int operator()(cc& c, int x1, str_view op, int x2) const
+    {
+        c.yo();
+        switch (op[0])
         {
         case '+':
             return x1 + x2;
@@ -30,9 +37,9 @@ struct binary_op
 
 struct unary_op
 {
-    constexpr int operator()(char op, int x) const
+    constexpr int operator()(cc&, str_view op, int x) const
     {
-        switch (op)
+        switch (op[0])
         {
         case '!':
             return ~x;
@@ -57,7 +64,7 @@ constexpr term o_neg("~", 6);
 
 constexpr parser p(
     expr,
-    { "1", "2", o_plus, o_minus, o_mul, o_div, o_or, o_and, o_xor, o_neg, "(", ")" },
+    make_terms("1", "2", o_plus, o_minus, o_mul, o_div, o_or, o_and, o_xor, o_neg, "(", ")"),
     std::make_tuple(expr),
     make_rules(
         expr(expr, "+", expr) >= binary_op{},
@@ -69,24 +76,28 @@ constexpr parser p(
         expr(expr, "^", expr) >= binary_op{},
         expr("-", expr)[6] >= unary_op{},
         expr("~", expr) >= unary_op{},
-        expr("(", expr, ")") >= [](char, int x, char) { return x; },
-        expr("1") >= [](char) { return 1; },
-        expr("2") >= [](char) { return 2; }
-    )
+        expr("(", expr, ")") >= [](cc&, auto, int x, auto) { return x; },
+        expr("1") >= [](cc&, auto) { return 1; },
+        expr("2") >= [](cc&, auto) { return 2; }
+    ),
+    use_context<cc>{},
+    deduce_max_states{}
 );
 
 //diag_msg msg(p, use_string_stream{});
 
-constexpr parse_result res(p, cstring_buffer("(1+2)*2"), use_message_max_size<1000>{}, use_message_max_size<1000>{});
-//parse_result res(p, cstring_buffer("1+1"), use_string_stream{}, use_string_stream{});
+constexpr parse_result res(p, cstring_buffer("(1+2)*2"), use_const_message<1000>{}, use_const_message<1000>{});
+
 constexpr auto v = res.get_value();
+constexpr auto c = res.get_context();
 
 int main()
 {
     //std::cout << msg.get_stream().str();
 
-    //std::cout << res.get_error_stream().str();
+    std::cout << res.get_error_stream().str();
     std::cout << res.get_trace_stream().str();
     std::cout << v;
+    std::cout << c.x;
 }
 
