@@ -301,18 +301,6 @@ struct cstream
     size_t current_size = 0;
 };
 
-template<typename T>
-struct is_cstream
-{
-    static const bool value = false;
-};
-
-template<size_t S>
-struct is_cstream<cstream<S>>
-{
-    static const bool value = true;
-};
-
 template<size_t First, size_t... Rest>
 struct max
 {
@@ -327,9 +315,6 @@ struct max<X>
 
 template<size_t... X>
 constexpr size_t max_v = max<X...>::value;
-
-template<typename... T>
-constexpr int size_sum = (0 + ... + sizeof(T));
 
 template<typename ValueType>
 struct nterm
