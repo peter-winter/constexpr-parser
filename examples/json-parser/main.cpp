@@ -137,7 +137,7 @@ constexpr diag_msg msg(p, use_const_message<200000>{});
 
 int main()
 {
-    //std::cout << msg.get_stream().str();
+    std::cout << msg.get_stream().str();
     std::cout << res.get_trace_stream().str();
     return 0;
 }
