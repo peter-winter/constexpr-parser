@@ -9,9 +9,8 @@
 				"-g",
 				"${file}",
 				"-o",
-				"../../bin/json-parser/main",
-				"-I../../src",
-				"-std=c++17"
+				"./bin/${fileBasenameNoExtension}/${fileBasenameNoExtension}",
+				"-O3"
 			],
 			"options": {
 				"cwd": "${workspaceFolder}"
@@ -22,7 +21,8 @@
 			"group": {
 				"kind": "build",
 				"isDefault": true
-			}
+			},
+			"detail": "compiler: /usr/local/bin/g++"
 		}
 	]
 }
