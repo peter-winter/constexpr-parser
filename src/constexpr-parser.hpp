@@ -125,6 +125,11 @@ struct str_view
     size_t size;
 };
 
+constexpr str_view add_str_views(const str_view& s1, const str_view& s2)
+{
+    return str_view{ s1.str, s1.size + s2.size };
+}
+
 template<typename Container, typename Pred>
 constexpr Container& sort(Container& c, Pred p)
 {
@@ -180,6 +185,12 @@ struct cstring_buffer
 
 template<size_t N>
 cstring_buffer(const char(&)[N])->cstring_buffer<N>;
+
+struct skip
+{
+    template<typename T>
+    constexpr skip(T&&) {};
+};
 
 template<typename T>
 struct contains_type
@@ -241,7 +252,7 @@ struct parse_table_cursor_stack_type
 template<size_t N>
 struct parse_table_cursor_stack_type<cstring_buffer<N>>
 {
-    using type = cvector<size_t, N>;
+    using type = cvector<size_t, N * 2>;
 };
 
 template<typename Buffer>
@@ -260,24 +271,11 @@ struct parser_value_stack_type<cstring_buffer<N>, ValueVariantType, std::enable_
 template<size_t N, typename ValueVariantType>
 struct parser_value_stack_type<cstring_buffer<N>, ValueVariantType, std::enable_if_t<is_cvector_compatible<ValueVariantType>::value>>
 {
-    using type = cvector<ValueVariantType, N>;
+    using type = cvector<ValueVariantType, N * 2>;
 };
 
 template<typename Buffer, typename ValueVariantType>
 using parser_value_stack_type_t = typename parser_value_stack_type<Buffer, ValueVariantType>::type;
-
-template<size_t N>
-constexpr size_t find_name(const name_table<N>& table, const char* name)
-{
-    size_t res = 0;
-    for (const auto& n : table)
-    {
-        if (str_view::equal(n, name))
-            return res;
-        res++;
-    }
-    return uninitialized;
-}
 
 template<size_t MaxSize>
 struct cstream
@@ -297,6 +295,11 @@ struct cstream
     {
         data[current_size++] = c;
         return *this;
+    }
+
+    constexpr cstream& operator << (size16_t x)
+    {
+        return *this << size_t(x);
     }
 
     constexpr cstream& operator << (size_t x)
@@ -326,6 +329,33 @@ struct cstream
     char data[MaxSize] = { 0 };
     size_t current_size = 0;
 };
+
+template<size_t N>
+constexpr size_t find_name(const name_table<N>& table, const char* name)
+{
+    size_t res = 0;
+    for (const auto& n : table)
+    {
+        if (str_view::equal(n, name))
+            return res;
+        res++;
+    }
+    cstream<100> s;
+    s << "name not found: " << name;
+    throw std::runtime_error(s.str());
+}
+
+constexpr size_t find_char(char c, const char* str)
+{
+    size_t i = 0;
+    while (*str)
+    {
+        if (*str == c)
+            return i;
+        str++; i++;
+    }
+    return uninitialized;
+}
 
 template<size_t First, size_t... Rest>
 struct max
@@ -454,10 +484,17 @@ constexpr auto fake_root<ValueType>::operator()(Args... args) const
 
 enum class associativity { ltor, rtol };
 
+enum class term_method { exact, exclusive, regex };
+
+struct exclusive
+{
+    const char* str;
+};
+
 struct term_data
 {
     constexpr term_data(const char(&str)[2]) :
-        str(str), trivial(str[1] == 0)
+        str(str), method(str[1] == 0 ? term_method::exact : term_method::regex)
     {
         if (str[0] == 0)
             throw std::runtime_error("empty string not allowed");
@@ -465,14 +502,20 @@ struct term_data
 
     template<size_t N>
     constexpr term_data(const char(&str)[N]) :
-        str(str), trivial(false)
+        str(str), method(term_method::regex)
     {
         if (str[0] == 0)
             throw std::runtime_error("empty string not allowed");
     }
 
+    constexpr term_data(exclusive e) :
+        str(e.str), method(term_method::exclusive)
+    {}
+
+    constexpr term_method get_method() const { return method; }
+
     const char* str;
-    bool trivial;
+    term_method method;
 };
 
 struct term
@@ -508,7 +551,7 @@ struct term
     {}
 
     constexpr term(term_data data, int precedence, associativity a, const char* name) :
-        data(data.str), precedence(precedence), ass(a), name(name), trivial(data.trivial)
+        data(data.str), precedence(precedence), ass(a), name(name), method(data.get_method())
     {
         if (name[0] == 0)
             throw std::runtime_error("empty name not allowed");
@@ -516,11 +559,13 @@ struct term
 
     constexpr const char* get_name() const { return name; }
 
+    constexpr bool is_trivial() const { return method == term_method::exact || method == term_method::exclusive; }
+
     const char* data;
     int precedence;
     associativity ass;
     const char* name;
-    bool trivial;
+    term_method method;
 };
 
 struct eof
@@ -732,8 +777,22 @@ struct parser
         term_precedences[idx] = precedence;
         term_associativities[idx] = ass;
 
-        trivial_term_table[char_to_idx(t.data[0])] = idx;
-        trivial_lexical_analyzer = trivial_lexical_analyzer && t.trivial;
+        if (trivial_lexical_analyzer && t.is_trivial())
+        {
+            if (t.method == term_method::exact)
+                trivial_term_table[char_to_idx(t.data[0])] = idx;
+            else if (t.method == term_method::exclusive)
+            {
+                for (size_t i = 0; i < std::size(trivial_term_table); ++i)
+                {
+                    size_t idx_found = find_char(index_to_char(i), t.data);
+                    if (idx_found == uninitialized)
+                        trivial_term_table[i] = idx;
+                }
+            }
+        }
+        else
+            trivial_lexical_analyzer = false;
     }
 
     template<typename ValueType>
@@ -1086,7 +1145,7 @@ struct parser
         {
             s << get_symbol_name(right_sides[ri.r_idx][i]) << " ";
         }
-        s << "| " << term_names[addr.t];
+        s << "==> " << term_names[addr.t];
     }
 
     template<typename Stream>
@@ -1137,6 +1196,7 @@ struct parser
     template<typename Stream>
     constexpr void write_diag_str(Stream& s) const
     {
+        s << "Parser Object size: " << sizeof(*this) << "\n\n";
         for (size_t i = 0; i < state_count; ++i)
         {
             write_state_diag_str(s, i);
@@ -1159,49 +1219,12 @@ struct parser
             return LValueType(f(context, std::get<RValueType>(std::move(*(start + I)))...));
     }
 
-    template<typename F, typename LValueType, typename... RValueType, size_t... I>
-    constexpr static LValueType reduce_value_impl(const F& f, value_variant_type* start, std::index_sequence<I...>, no_context& context)
-    {
-        return LValueType(f(std::get<RValueType>(std::move(*(start + I)))...));
-    }
-
     template<size_t RuleIdx, typename F, typename LValueType, typename... RValueType>
     constexpr static value_variant_type reduce_value(const functor_tuple_type& functors, value_variant_type* start, context_type& context)
     {
         return value_variant_type(
             reduce_value_impl<F, LValueType, RValueType...>(std::get<RuleIdx>(functors), start, std::index_sequence_for<RValueType...>{}, context)
         );
-    }
-
-    template<typename It, typename ErrorStream, typename TraceStream>
-    constexpr auto get_next_term(const It& start, const It& end, ErrorStream& error_stream, TraceStream& trace_stream) const
-    {
-        size_t term_idx = uninitialized;
-        size_t term_size = uninitialized;
-        It it = start;
-        if (it == end)
-        {
-            term_idx = eof_idx;
-            term_size = 0;
-        }
-        else
-        {
-            char c = *it;
-            term_idx = trivial_term_table[char_to_idx(c)];
-            term_size = 1;
-        }
-
-        if (term_idx != uninitialized)
-        {
-            trace_stream << "Recognized " << term_names[term_idx] << " \n";
-            it++;
-        }
-        else
-        {
-            write_unexpected_character_to_stream(error_stream, *it);
-            write_unexpected_character_to_stream(trace_stream, *it);
-        }
-        return std::make_pair(term_idx, term_size);
     }
 
     template<typename ParserState>
@@ -1215,8 +1238,8 @@ struct parser
     template<typename ParserState>
     constexpr void reduce(ParserState& ps, size_t rule_info_idx) const
     {
-        ps.trace_stream << "Reduce using rule " << rule_info_idx << "\n";
         const auto& ri = rule_infos[rule_info_idx];
+        ps.trace_stream << "Reduced using rule " << ri.r_idx << "\n";
         ps.cursor_stack.erase(ps.cursor_stack.end() - ri.r_elements, ps.cursor_stack.end());
         size_t new_cursor_value = parse_table[ps.cursor_stack.back()][ri.l_idx].shift;
         ps.trace_stream << "Go to " << new_cursor_value << "\n";
@@ -1253,6 +1276,46 @@ struct parser
     {
         ps.trace_stream << "Success \n";
         return std::get<root_value_type>(ps.value_stack.front());
+    }
+
+    template<typename It, typename ErrorStream, typename TraceStream>
+    constexpr auto get_next_term_trivial(const It& start, const It& end, ErrorStream& error_stream, TraceStream& trace_stream) const
+    {
+        size_t term_idx = uninitialized;
+        size_t term_size = uninitialized;
+        It it = start;
+        if (it == end)
+        {
+            term_idx = eof_idx;
+            term_size = 0;
+        }
+        else
+        {
+            char c = *it;
+            term_idx = trivial_term_table[char_to_idx(c)];
+            term_size = 1;
+        }
+
+        if (term_idx != uninitialized)
+        {
+            trace_stream << "Recognized " << term_names[term_idx] << " \n";
+            it++;
+        }
+        else
+        {
+            write_unexpected_character_to_stream(error_stream, *it);
+            write_unexpected_character_to_stream(trace_stream, *it);
+        }
+        return std::make_pair(term_idx, term_size);
+    }
+
+    template<typename It, typename ErrorStream, typename TraceStream>
+    constexpr auto get_next_term(const It& start, const It& end, ErrorStream& error_stream, TraceStream& trace_stream) const
+    {
+        if (trivial_lexical_analyzer)
+            return get_next_term_trivial(start, end, error_stream, trace_stream);
+        else
+            throw std::runtime_error("not implemented yet");
     }
 
     template<typename Buffer, typename ErrorStream, typename TraceStream>
@@ -1371,7 +1434,6 @@ parser<
     MaxStateUsage::template value<TermCount, Rules::n...>
 >;
 
-
 template<typename... Terms>
 constexpr auto make_terms(const Terms&... terms)
 {
@@ -1404,7 +1466,7 @@ struct diag_msg
         p.write_diag_str(stream);
     }
         
-    const StreamType& get_stream() const
+    constexpr const StreamType& get_stream() const
     {
         return stream;
     }
@@ -1463,3 +1525,6 @@ parse_result(const Parser&, const Buffer&, ErrorStreamUsage)
 template<typename Parser, typename Buffer>
 parse_result(const Parser&, const Buffer&)
 ->parse_result<typename Parser::root_value_type, typename Parser::context_type, no_stream, no_stream>;
+
+
+

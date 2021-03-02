@@ -10,6 +10,8 @@ Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "src", "src", "{95E0E777-743
 		..\..\src\constexpr-parser.hpp = ..\..\src\constexpr-parser.hpp
 	EndProjectSection
 EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "json-parser", "json-parser\json-parser.vcxproj", "{4EE784E7-548F-4C89-B283-F9376F887131}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|x64 = Debug|x64
@@ -20,6 +22,10 @@ Global
 		{03FD0C6C-B846-4C18-8A9F-ED3634A02B04}.Debug|x64.Build.0 = Debug|x64
 		{03FD0C6C-B846-4C18-8A9F-ED3634A02B04}.Release|x64.ActiveCfg = Release|x64
 		{03FD0C6C-B846-4C18-8A9F-ED3634A02B04}.Release|x64.Build.0 = Release|x64
+		{4EE784E7-548F-4C89-B283-F9376F887131}.Debug|x64.ActiveCfg = Debug|x64
+		{4EE784E7-548F-4C89-B283-F9376F887131}.Debug|x64.Build.0 = Debug|x64
+		{4EE784E7-548F-4C89-B283-F9376F887131}.Release|x64.ActiveCfg = Release|x64
+		{4EE784E7-548F-4C89-B283-F9376F887131}.Release|x64.Build.0 = Release|x64
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
