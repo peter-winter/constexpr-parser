@@ -18,6 +18,11 @@ constexpr size_t uninitialized = size_t(-1);
 constexpr size16_t uninitialized16 = size16_t(-1);
 constexpr size32_t uninitialized32 = size32_t(-1);
 
+struct slice
+{
+    size_t start;
+    size_t n;
+};
 
 template<typename T>
 struct is_cvector_compatible : std::bool_constant<std::is_default_constructible_v<T>&& std::is_trivially_destructible_v<T>>
@@ -125,11 +130,6 @@ struct str_view
     size_t size;
 };
 
-constexpr str_view add_str_views(const str_view& s1, const str_view& s2)
-{
-    return str_view{ s1.str, s1.size + s2.size };
-}
-
 template<typename Container, typename Pred>
 constexpr Container& sort(Container& c, Pred p)
 {
@@ -151,18 +151,19 @@ constexpr Container& sort(Container& c, Pred p)
     return c;
 }
 
+template<typename T, size_t N1, size_t N2, size_t... I>
+constexpr void copy_array(T (&a1)[N1], const T (&a2)[N2], std::index_sequence<I...>)
+{
+    (void(a1[I] = a2[I]), ...);
+}
+
 template<size_t N>
 struct cstring_buffer
 {
-    constexpr cstring_buffer(const char(&source)[N])
+    template<size_t N1>
+    constexpr cstring_buffer(const char(&source)[N1])
     {
-        init(source, std::make_index_sequence<N>{});
-    }
-
-    template<size_t... I>
-    constexpr auto init(const char(&source)[N], std::index_sequence<I...>)
-    {
-        (void(data[I] = source[I]), ...);
+        copy_array(data, source, std::make_index_sequence<N1>{});
     }
 
     struct iterator
@@ -181,6 +182,26 @@ struct cstring_buffer
     constexpr str_view view(const iterator& it, size_t size) const { return str_view(it.ptr, size); }
 
     char data[N] = { 0 };
+};
+
+struct string_buffer
+{
+    string_buffer(std::string&& str):
+        str(std::move(str))
+    {}
+
+    string_buffer(const char* str):
+        str(str)
+    {}
+
+    auto begin() const { return str.begin(); }
+    auto end() const { return str.end(); }
+    str_view view(const std::string::iterator& it, size_t size) const
+    { 
+        return str_view(str.data() + (it - str.begin()), size);
+    }
+
+    std::string str;
 };
 
 template<size_t N>
@@ -387,7 +408,7 @@ struct nterm
     constexpr const char* get_name() const { return name; }
 
     template<typename... Args>
-    constexpr auto operator()(Args... args) const;
+    constexpr auto operator()(const Args&... args) const;
 
     const char* name;
 };
@@ -398,7 +419,7 @@ struct fake_root
     using value_type = ValueType;
 
     template<typename... Args>
-    constexpr auto operator()(Args... args) const;
+    constexpr auto operator()(const Args&... args) const;
 
     constexpr static const char* get_name() { return "##"; };
 };
@@ -445,133 +466,151 @@ struct rule
     }
 };
 
-template<typename T>
-struct value_type
-{
-    using type = typename T::value_type;
-};
-
-template<>
-struct value_type<char>
-{
-    using type = char;
-};
-
-template<>
-struct value_type<const char*>
-{
-    using type = str_view;
-};
-
-template<typename T>
-using value_type_t = typename value_type<T>::type;
-
-template<typename ValueType>
-template<typename... Args>
-constexpr auto nterm<ValueType>::operator()(Args... args) const
-{
-    using f_type = move_construct<ValueType, value_type_t<Args>...>;
-    return rule<f_type, nterm<ValueType>, Args...>(f_type{}, *this, std::make_tuple(args...));
-}
-
-template<typename ValueType>
-template<typename... Args>
-constexpr auto fake_root<ValueType>::operator()(Args... args) const
-{
-    using f_type = move_construct<ValueType, ValueType>;
-    return rule<f_type, fake_root<ValueType>, Args...>{f_type{}, * this, std::make_tuple(args...)};
-}
-
 enum class associativity { ltor, rtol };
 
-enum class term_method { exact, exclusive, regex };
+enum class term_method { exact, exclude, include, regex };
 
-struct exclusive
+template<size_t N>
+struct exclude
 {
-    const char* str;
-};
-
-struct term_data
-{
-    constexpr term_data(const char(&str)[2]) :
-        str(str), method(str[1] == 0 ? term_method::exact : term_method::regex)
+    template<size_t N1>
+    constexpr exclude(const char(&source)[N1])
     {
-        if (str[0] == 0)
-            throw std::runtime_error("empty string not allowed");
+        copy_array(data, source, std::make_index_sequence<N1>{});
     }
 
-    template<size_t N>
-    constexpr term_data(const char(&str)[N]) :
-        str(str), method(term_method::regex)
-    {
-        if (str[0] == 0)
-            throw std::runtime_error("empty string not allowed");
-    }
-
-    constexpr term_data(exclusive e) :
-        str(e.str), method(term_method::exclusive)
-    {}
-
-    constexpr term_method get_method() const { return method; }
-
-    const char* str;
-    term_method method;
+    char data[N] = {};
 };
 
+template<size_t N>
+exclude(const char(&)[N])->exclude<N>;
+
+template<size_t N>
+struct include
+{
+    template<size_t N1>
+    constexpr include(const char(&source)[N1])
+    {
+        copy_array(data, source, std::make_index_sequence<N1>{});
+    }
+
+    char data[N] = {};
+};
+
+template<size_t N>
+include(const char(&)[N])->include<N>;
+
+using term_value_type = str_view;
+
+template<size_t N>
 struct term
 {
-    using value_type = str_view;
+    using value_type = term_value_type;
 
-    constexpr term(term_data data) :
-        term(data, 0, associativity::ltor, data.str)
-    {}
-
-    constexpr term(term_data data, associativity a) :
-        term(data, 0, a, data.str)
-    {}
-
-    constexpr term(term_data data, int precedence) :
-        term(data, precedence, associativity::ltor, data.str)
-    {}
-
-    constexpr term(term_data data, int precedence, associativity a) :
-        term(data, precedence, associativity::ltor, data.str)
-    {}
-
-    constexpr term(term_data data, const char* name) :
-        term(data, 0, associativity::ltor, name)
-    {}
-
-    constexpr term(term_data data, associativity a, const char* name) :
-        term(data, 0, a, name)
-    {}
-
-    constexpr term(term_data data, int precedence, const char* name) :
-        term(data, precedence, associativity::ltor, name)
-    {}
-
-    constexpr term(term_data data, int precedence, associativity a, const char* name) :
-        data(data.str), precedence(precedence), ass(a), name(name), method(data.get_method())
+    template<size_t N1>
+    constexpr term(const char (&source)[N1], int precedence = 0, associativity a = associativity::ltor, const char* name = nullptr) :
+        precedence(precedence), ass(a), name(name ? name : source), 
+        method(N == 2 && source[1] == 0 ? term_method::exact : term_method::regex)
     {
+        copy_array(data, source, std::make_index_sequence<N1>{});
+        check();
+    }
+
+    template<size_t N1>
+    constexpr term(exclude<N1> ex, int precedence = 0, associativity a = associativity::ltor, const char* name = nullptr) :
+        precedence(precedence), ass(a), name(name ? name : ex.data), 
+        method(term_method::exclude)
+    {
+        copy_array(data, ex.data, std::make_index_sequence<N1>{});
+        check();
+    }
+
+    template<size_t N1>
+    constexpr term(include<N1> in, int precedence = 0, associativity a = associativity::ltor, const char* name = nullptr) :
+        precedence(precedence), ass(a), name(name ? name : in.data), 
+        method(term_method::include)
+    {
+        copy_array(data, in.data, std::make_index_sequence<N1>{});
+        check();
+    }
+
+    constexpr void check()
+    {
+        if (data[0] == 0)
+            throw std::runtime_error("empty string not allowed");
         if (name[0] == 0)
             throw std::runtime_error("empty name not allowed");
     }
-
+    
     constexpr const char* get_name() const { return name; }
 
-    constexpr bool is_trivial() const { return method == term_method::exact || method == term_method::exclusive; }
+    constexpr bool is_trivial() const 
+    { 
+        return method != term_method::regex;
+    }
 
-    const char* data;
+    char data[N] = {};
     int precedence;
     associativity ass;
     const char* name;
     term_method method;
 };
 
+template<size_t N>
+term(const char (&)[N], int = 0, associativity = associativity::ltor, const char* = nullptr) -> term<N>;
+
+template<size_t N>
+term(exclude<N>, int = 0, associativity = associativity::ltor, const char* = nullptr) -> term<N>;
+
+template<size_t N>
+term(include<N>, int = 0, associativity = associativity::ltor, const char* = nullptr) -> term<N>;
+
 struct eof
 {
     constexpr static const char* get_name() { return "<eof>"; }
 };
+
+template<typename T>
+using value_type_t = typename T::value_type;
+
+template<typename T>
+struct symbol_type
+{
+    using type = T;
+};
+
+template<size_t N>
+struct symbol_type<char [N]>
+{
+    using type = term<N>;
+};
+
+template<typename T>
+using symbol_type_t = typename symbol_type<T>::type;
+
+template<typename ValueType>
+template<typename... Args>
+constexpr auto nterm<ValueType>::operator()(const Args&... args) const
+{
+    using f_type = move_construct<ValueType, value_type_t<symbol_type_t<Args>>...>;
+    return rule<f_type, nterm<ValueType>, symbol_type_t<Args>...>(
+        f_type{}, 
+        *this, 
+        std::make_tuple(symbol_type_t<Args>(args)...)
+    );
+}
+
+template<typename ValueType>
+template<typename... Args>
+constexpr auto fake_root<ValueType>::operator()(const Args&... args) const
+{
+    using f_type = move_construct<ValueType, ValueType>;
+    return rule<f_type, fake_root<ValueType>, symbol_type_t<Args>...>(
+        f_type{}, 
+        *this, 
+        std::make_tuple(symbol_type_t<Args>(args)...)
+    );
+}
 
 template<typename C>
 struct use_context
@@ -636,12 +675,6 @@ struct parser
         size_t rule_info_idx;
         size_t after;
         size_t t;
-    };
-
-    struct slice
-    {
-        size_t start;
-        size_t n;
     };
 
     struct rule_info
@@ -716,10 +749,10 @@ struct parser
         parser(root, terms, nterms, std::move(rules))
     {}
 
-    template<typename Root, typename Terms, typename... NTerms, typename... Rules>
+    template<typename Root, typename... Terms, typename... NTerms, typename... Rules>
     constexpr parser(
         Root root,
-        const Terms& terms,
+        std::tuple<Terms...> terms,
         std::tuple<NTerms...> nterms,
         std::tuple<Rules...>&& rules) :
         functors(make_functors_tuple(std::index_sequence_for<Rules...>{}, std::move(rules)))
@@ -729,12 +762,9 @@ struct parser
 
         analyze_nterms(std::index_sequence_for<NTerms...>{}, nterms);
         analyze_nterm(fake_root<RootValueType>{});
-
-        analyze_terms(terms);
+        analyze_terms(std::index_sequence_for<Terms...>{}, terms);
         analyze_eof(eof{});
-
         analyze_rules(std::index_sequence_for<Rules...>{}, root, std::move(rules));
-
         analyze_states();
     }
 
@@ -743,23 +773,7 @@ struct parser
     {
         return std::make_tuple(std::move(std::get<I>(rules).f)...);
     }
-
-    constexpr void make_nterm_rule_slices()
-    {
-        size_t nt = 0;
-        for (size_t i = 0u; i < rule_count; ++i)
-        {
-            if (nt != rule_infos[i].l_idx)
-            {
-                nt = rule_infos[i].l_idx;
-                nterm_rule_slices[nt].start = i;
-                nterm_rule_slices[nt].n = 1;
-            }
-            else
-                nterm_rule_slices[nt].n++;
-        }
-    }
-
+    
     constexpr void analyze_eof(eof)
     {
         term_names[eof_idx] = eof::get_name();
@@ -767,7 +781,33 @@ struct parser
         term_associativities[eof_idx] = associativity::ltor;
     }
 
-    constexpr void analyze_term(const term& t, size_t idx)
+    template<size_t N>
+    constexpr void analyze_trivial_term(term<N> t, size_t idx)
+    {
+        if (t.method == term_method::exact)
+            trivial_term_table[char_to_idx(t.data[0])] = idx;
+        else if (t.method == term_method::exclude)
+        {
+            for (size_t i = 0; i < std::size(trivial_term_table); ++i)
+            {
+                size_t idx_found = find_char(index_to_char(i), t.data);
+                if (idx_found == uninitialized)
+                    trivial_term_table[i] = idx;
+            }
+        }
+        else if (t.method == term_method::include)
+        {
+            const char* data = t.data;
+            while (*data)
+            {
+                trivial_term_table[*data] = idx;
+                ++data;
+            }                
+        }
+    }
+
+    template<size_t N>
+    constexpr void analyze_term(term<N> t, size_t idx)
     {
         const char* name = t.name;
         int precedence = t.precedence;
@@ -778,19 +818,7 @@ struct parser
         term_associativities[idx] = ass;
 
         if (trivial_lexical_analyzer && t.is_trivial())
-        {
-            if (t.method == term_method::exact)
-                trivial_term_table[char_to_idx(t.data[0])] = idx;
-            else if (t.method == term_method::exclusive)
-            {
-                for (size_t i = 0; i < std::size(trivial_term_table); ++i)
-                {
-                    size_t idx_found = find_char(index_to_char(i), t.data);
-                    if (idx_found == uninitialized)
-                        trivial_term_table[i] = idx;
-                }
-            }
-        }
+            analyze_trivial_term(t, idx);
         else
             trivial_lexical_analyzer = false;
     }
@@ -807,7 +835,8 @@ struct parser
         nterm_names[fake_root_idx] = fake_root<ValueType>::get_name();
     }
 
-    constexpr auto make_symbol(term t) const
+    template<size_t N>
+    constexpr auto make_symbol(term<N> t) const
     {
         return symbol{ true, find_name(term_names, t.name) };
     }
@@ -818,15 +847,18 @@ struct parser
         return symbol{ false, find_name(nterm_names, nt.name) };
     }
 
-    constexpr auto make_symbol(const char* str) const
+    template<size_t N>
+    constexpr auto make_symbol(const char (&str)[N]) const
     {
         return symbol{ true, find_name(term_names, str) };
     }
 
-    constexpr void analyze_terms(const std::array<term, TermCount>& terms)
+    template<typename... Terms, size_t... I>
+    constexpr void analyze_terms(
+        std::index_sequence<I...>,
+        std::tuple<Terms...> terms)
     {
-        for (size_t idx = 0; idx < TermCount; ++idx)
-            analyze_term(terms[idx], idx);
+        (void(analyze_term(std::get<I>(terms), I)), ...);
     }
 
     template<typename... NTerms, size_t... I>
@@ -847,6 +879,22 @@ struct parser
         analyze_rule<root_rule_idx>(fake_root<RootValueType>{}(root), std::index_sequence<0>{});
         sort(rule_infos, [](const auto& ri1, const auto& ri2) { return ri1.l_idx < ri2.l_idx; });
         make_nterm_rule_slices();
+    }
+
+    constexpr void make_nterm_rule_slices()
+    {
+        size_t nt = 0;
+        for (size_t i = 0u; i < rule_count; ++i)
+        {
+            if (nt != rule_infos[i].l_idx)
+            {
+                nt = rule_infos[i].l_idx;
+                nterm_rule_slices[nt].start = i;
+                nterm_rule_slices[nt].n = 1;
+            }
+            else
+                nterm_rule_slices[nt].n++;
+        }
     }
 
     constexpr size_t calculate_rule_last_term(size_t rule_idx, size_t rule_size) const
@@ -1318,8 +1366,15 @@ struct parser
             throw std::runtime_error("not implemented yet");
     }
 
+    template<typename Buffer, typename ErrorStream, typename TraceStream, typename = std::enable_if_t<std::is_same_v<context_type, no_context>>>
+    constexpr std::optional<root_value_type> parse(const Buffer& buffer, ErrorStream& error_stream, TraceStream& trace_stream) const
+    {
+        no_context c;
+        return parse_in_context(buffer, c, error_stream, trace_stream);
+    }
+
     template<typename Buffer, typename ErrorStream, typename TraceStream>
-    constexpr std::optional<root_value_type> parse(const Buffer& buffer, context_type& context, ErrorStream& error_stream, TraceStream& trace_stream) const
+    constexpr std::optional<root_value_type> parse_in_context(const Buffer& buffer, context_type& context, ErrorStream& error_stream, TraceStream& trace_stream) const
     {
         parser_value_stack_type_t<Buffer, ValueVariantType> value_stack{};
         parse_table_cursor_stack_type_t<Buffer> cursor_stack{};
@@ -1413,10 +1468,10 @@ struct deduce_max_states
     static const size_t value = ((0 + ... + (RuleSizes + 1)) + 2) * (TermCount + 1);
 };
 
-template<typename RootValueType, size_t TermCount, typename... NTermValueType, typename... Rules, typename ContextUsage, typename MaxStateUsage>
+template<typename RootValueType, size_t... N, typename... NTermValueType, typename... Rules, typename ContextUsage, typename MaxStateUsage>
 parser(
     nterm<RootValueType>,
-    const std::array<term, TermCount>&,
+    std::tuple<term<N>...>,
     std::tuple<nterm<NTermValueType>...>,
     std::tuple<Rules...>,
     ContextUsage,
@@ -1424,24 +1479,30 @@ parser(
 ) ->
 parser<
     RootValueType,
-    TermCount,
+    sizeof...(N),
     sizeof...(NTermValueType),
     sizeof...(Rules),
     max_v<Rules::n...>,
-    unique_types_variant_t<char, term::value_type, NTermValueType...>,
+    unique_types_variant_t<char, term_value_type, NTermValueType...>,
     std::tuple<typename Rules::f_type...>,
     typename ContextUsage::type,
-    MaxStateUsage::template value<TermCount, Rules::n...>
+    MaxStateUsage::template value<sizeof...(N), Rules::n...>
 >;
 
 template<typename... Terms>
-constexpr auto make_terms(const Terms&... terms)
+constexpr auto terms(const Terms&... terms)
 {
-    return std::array<term, sizeof...(Terms)>{ term(terms)... };
+    return std::make_tuple(term(terms)...);
+}
+
+template<typename... NTerms>
+constexpr auto nterms(NTerms... nterms)
+{
+    return std::make_tuple(nterms...);
 }
 
 template<typename... Rules>
-constexpr auto make_rules(Rules&&... rules)
+constexpr auto rules(Rules&&... rules)
 {
     return std::make_tuple(std::move(rules)...);
 }
@@ -1498,7 +1559,7 @@ struct parse_result
     template<typename Parser, typename Buffer>
     constexpr parse_result(const Parser& p, const Buffer& buffer)
     {
-        value = p.parse(buffer, context, error_stream, trace_stream);
+        value = p.parse_in_context(buffer, context, error_stream, trace_stream);
     }
 
     constexpr const auto& get_error_stream() const { return error_stream; }

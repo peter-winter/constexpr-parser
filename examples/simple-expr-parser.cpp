@@ -32,9 +32,9 @@ constexpr term o_div("/", 2);
 
 constexpr parser p(
     expr,
-    make_terms("1", "2", o_plus, o_minus, o_mul, o_div, "(", ")"),
-    std::make_tuple(expr),
-    make_rules(
+    terms("1", "2", o_plus, o_minus, o_mul, o_div, "(", ")"),
+    nterms(expr),
+    rules(
         expr(expr, "+", expr) >= binary_op{},
         expr(expr, "-", expr) >= binary_op{},
         expr(expr, "*", expr) >= binary_op{},
@@ -64,8 +64,9 @@ constexpr const char* res_fail_trace = res_fail.get_trace_stream().str();
 int main()
 {
     std::cout << res_ok_trace << std::endl;
-    std::cout << "Value: " << v << std::endl;
+    std::cout << "Value: " << v << std::endl << std::endl;
     
+    std::cout << "Fail case" << std::endl;
     std::cout << res_fail_trace << std::endl;
     std::cout << error << std::endl;
 
