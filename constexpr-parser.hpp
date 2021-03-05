@@ -37,10 +37,24 @@ template<typename T, size_t N>
 struct cvector<T, N, std::enable_if_t<is_cvector_compatible<T>::value>>
 {
     using size_type = size_t;
-
+    
     constexpr cvector() :
         the_data{}, current_size(0)
     {}
+
+    constexpr cvector(T&& arg, size_t count):
+        the_data{}, current_size(0)
+    {
+        for (size_t i = 0; i < count; ++i)
+            emplace_back(std::move(arg));
+    }
+
+    constexpr cvector(const T& arg, size_t count):
+        the_data{}, current_size(0)
+    {
+        for (size_t i = 0; i < count; ++i)
+            push_back(arg);
+    }
 
     template<typename Derived>
     struct iterator_base
@@ -643,11 +657,18 @@ struct dfa_state
     size_t transitions[distinct_values_count<char>] = {};
 };
 
+struct char_range
+{
+    char start;
+    char end;
+};
+
 template<size_t MaxStates, size_t MaxListLength>
 struct dfa
 {
     using dfa_state_container_type = cvector<dfa_state, MaxStates>;
     using char_list_type = cvector<char, MaxListLength>;
+    using char_range_list_type = cvector<char_range, MaxListLength>;
 
     constexpr slice add_primary_single_char(char single)
     {
@@ -670,14 +691,21 @@ struct dfa
         return slice{ old_size, 2 };
     }
 
-    constexpr slice add_primary_char_range(char c1, char c2)
+    constexpr slice add_primary_char_ranges(const char_range_list_type& r)
     {
         size_t old_size = states.size();
         //current_size += 2;
         return slice{ old_size, 2 };
     }
 
-    constexpr slice add_primary_char_range_exclusive(char c1, char c2)
+    constexpr slice add_primary_char_ranges_exclusive(const char_range_list_type& r)
+    {
+        size_t old_size = states.size();
+        //current_size += 2;
+        return slice{ old_size, 2 };
+    }
+
+    constexpr slice add_primary_any_char()
     {
         size_t old_size = states.size();
         //current_size += 2;
@@ -1690,19 +1718,22 @@ template<typename DFAType>
 constexpr auto create_regex_parser(DFAType& sm)
 {
     using char_list_type = typename DFAType::char_list_type;
+    using char_range_list_type = typename DFAType::char_range_list_type;
     constexpr term regular_char(exclude("\\[]^-.*|()"), 0, associativity::ltor, "regular");
     constexpr nterm<slice> expr("expr");
     constexpr nterm<slice> alt("alt");
     constexpr nterm<slice> concat("concat");
     constexpr nterm<slice> q_expr("q_expr");
     constexpr nterm<slice> primary("primary");
-    constexpr nterm<char_list_type> char_list("char_list");
+    constexpr nterm<char_list_type> c_list("c_list");
+    constexpr nterm<char_range> c_range("c_range");
+    constexpr nterm<char_range_list_type> c_ranges("c_ranges");
     constexpr nterm<char> single_char("single_char");
 
     return parser(
         expr,
         terms(regular_char, "\\", "[", "]", "^", "-", ".", "*", "|", "(", ")"),
-        nterms(expr, alt, concat, q_expr, primary, char_list, single_char),
+        nterms(expr, alt, concat, q_expr, primary, c_list, c_range, c_ranges, single_char),
         rules(
             single_char(regular_char) >= [](str_view s) { return s[0]; },
             single_char("\\", "\\") >= [](skip, str_view s) { return s[0]; },
@@ -1714,17 +1745,21 @@ constexpr auto create_regex_parser(DFAType& sm)
             single_char("\\", "|") >= [](skip, str_view s) { return s[0]; },
             single_char("\\", "(") >= [](skip, str_view s) { return s[0]; },
             single_char("\\", ")") >= [](skip, str_view s) { return s[0]; },
-            char_list() >= []() { return char_list_type{}; },
-            char_list(single_char, char_list) >= [&sm](char c, char_list_type&& l) { l.push_back(c); return l; },
+            c_list(single_char) >= [](char c) { return char_list_type(c, 1); },
+            c_list(single_char, c_list) >= [&sm](char c, char_list_type&& l) { l.push_back(c); return l; },
+            c_range(single_char, "-", single_char) >= [](char c1, skip, char c2){ return char_range{c1, c2}; },
+            c_ranges(c_range) >= [](char_range r) { return char_range_list_type(r, 1); },
+            c_ranges(c_range, c_ranges) >= [](char_range r, char_range_list_type&& l) { l.push_back(r); return l; },
             primary(single_char) >= [&sm](char c) { return sm.add_primary_single_char(c); },
-            primary("[", char_list, "]") >= [&sm](skip, char_list_type&& l, skip) { return sm.add_primary_char_list(l); },
-            primary("[", "^", char_list, "]") >= [&sm](skip, skip, char_list_type&& l, skip) { return sm.add_primary_char_list_exclusive(l); },
-            primary("[", single_char, "-", single_char, "]") >= [&sm](skip, char c1, skip, char c2, skip) { return sm.add_primary_char_range(c1, c2); },
-            primary("[", "^", single_char, "-", single_char, "]") >= [&sm](skip, skip, char c1, skip, char c2, skip) { return sm.add_primary_char_range_exclusive(c1, c2); },
+            primary(".") >= [&sm](skip) { return sm.add_primary_any_char(); },
+            primary("[", c_list, "]") >= [&sm](skip, char_list_type&& l, skip) { return sm.add_primary_char_list(l); },
+            primary("[", "^", c_list, "]") >= [&sm](skip, skip, char_list_type&& l, skip) { return sm.add_primary_char_list_exclusive(l); },
+            primary("[", c_ranges, "]") >= [&sm](skip, char_range_list_type&& l, skip) { return sm.add_primary_char_ranges(l); },
+            primary("[", "^", c_ranges, "]") >= [&sm](skip, skip, char_range_list_type&& l, skip) { return sm.add_primary_char_ranges_exclusive(l); },
             primary("(", expr, ")") >= [](skip, slice p, skip) { return p; },
             q_expr(primary) >= [](slice p) { return p; },
             q_expr(primary, "*") >= [&sm](slice p, skip) { return sm.add_multiplication(p); },
-            concat() >= []() { return slice{ 0, 0 }; },
+            concat(q_expr) >= [](slice p) { return p; },
             concat(q_expr, concat) >= [&sm](slice p1, slice p2) { return sm.add_concat(p1, p2); },
             alt(concat) >= [](slice p) { return p; },
             alt(alt, "|", alt) >= [&sm](slice p1, skip, slice p2) { return sm.add_alt(p1, p2); },
