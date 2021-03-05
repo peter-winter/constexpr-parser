@@ -653,7 +653,11 @@ struct dfa_state
 
     bool start_state = false;
     bool end_state = false;
-    size_t recognized_idx = uninitialized;
+    struct recognition
+    {
+        size16_t conflicted[4] = { uninitialized16, uninitialized16, uninitialized16, uninitialized16 };
+    };
+    recognition recognized;
     size_t transitions[distinct_values_count<char>] = {};
 };
 
@@ -663,78 +667,122 @@ struct char_range
     char end;
 };
 
+using char_subset = cvector<bool, distinct_values_count<char>>;
+
 template<size_t MaxStates, size_t MaxListLength>
 struct dfa
 {
     using dfa_state_container_type = cvector<dfa_state, MaxStates>;
-    using char_list_type = cvector<char, MaxListLength>;
-    using char_range_list_type = cvector<char_range, MaxListLength>;
+    
+    constexpr static char_subset char_subset_from_item(char_range r)
+    {
+        char_subset res{};
+        for (size_t i = char_to_idx(r.start); i <= char_to_idx(r.end); ++i)
+            res[i] = true;
+        return res;
+    }
+    
+    constexpr static char_subset add_item_to_char_subset(char_subset&& s, char_range r)
+    {
+        for (size_t i = char_to_idx(r.start); i <= char_to_idx(r.end); ++i)
+            s[i] = true;
+        return s;
+    }
+    
+    constexpr slice add_primary_single_char(char c)
+    {
+        char_subset s;
+        s[char_to_idx(c)] = true;
+        return add_primary_char_subset(s);
+    }
 
-    constexpr slice add_primary_single_char(char single)
+    constexpr slice add_primary_char_subset(const char_subset& s)
     {
         size_t old_size = states.size();
-        //current_size += 2;
+        states.push_back(dfa_state());
+        states.back().start_state = true;
+        for (size_t i = 0; i < std::size(s); ++i)
+            if (s[i])
+            {
+                transition& t = states.back().transitions[i = states.size()];
+            }
+        states.push_back(dfa_state());
+        states.back().end_state = true;
         return slice{ old_size, 2 };
     }
 
-    constexpr slice add_primary_char_list(const char_list_type& l)
+    constexpr slice add_primary_char_subset_exclusive(char_subset& s)
     {
-        size_t old_size = states.size();
-        //current_size += 2;
-        return slice{ old_size, 2 };
-    }
-
-    constexpr slice add_primary_char_list_exclusive(const char_list_type& l)
-    {
-        size_t old_size = states.size();
-        //current_size += 2;
-        return slice{ old_size, 2 };
-    }
-
-    constexpr slice add_primary_char_ranges(const char_range_list_type& r)
-    {
-        size_t old_size = states.size();
-        //current_size += 2;
-        return slice{ old_size, 2 };
-    }
-
-    constexpr slice add_primary_char_ranges_exclusive(const char_range_list_type& r)
-    {
-        size_t old_size = states.size();
-        //current_size += 2;
-        return slice{ old_size, 2 };
+        for (bool& b : s)
+            b = !b;
+        return add_primary_char_subset(s);
     }
 
     constexpr slice add_primary_any_char()
     {
-        size_t old_size = states.size();
-        //current_size += 2;
-        return slice{ old_size, 2 };
+        char_subset s;
+        for (bool& b : s)
+            b = true;
+        return add_primary_char_subset(s);
     }
 
-    constexpr slice add_multiplication(slice p)
+    constexpr slice add_multiplication(slice s)
     {
-        size_t old_size = states.size();
-        return p;
-    }
-
-    constexpr slice add_concat(slice p1, slice p2)
-    {
-        if (p2.n != 0)
+        size_t b = states[s.start];
+        for (size_t i = s.start; i < s.start + s.size; ++i)
         {
+            if (s.end_state)
+                merge(b, i);
+        }
+        return s;
+    }
 
+    constexpr slice add_optional(slice s)
+    {
+        states[s.start].end_state = true;
+        return s;
+    }    
+
+    constexpr slice add_concat(slice s1, slice s2)
+    {
+        size_t b = states[s2.start];
+        for (size_t i = s1.start; i < s1.start + s1.size; ++i)
+        {
+            if (states[i].end_state)
+                merge(i, b);
         }
         return slice{ p1.start, p1.n + p2.n };
     }
 
-    constexpr slice add_alt(slice p1, slice p2)
+    constexpr slice add_alt(slice s1, slice s2)
     {
+        size_t b1 = states[s1.start];
+        size_t b2 = states[s2.start];
+        merge(b1, b2);
         return slice{ p1.start, p1.n + p2.n };
+    }
+
+    constexpr void merge(size_t to, size_t from)
+    {
+
     }
 
     constexpr void mark_end_states(slice s, size_t idx)
     {
-
+        for (size_t i = s.start; i < s.start + s.size; ++i)
+        {
+            if (!states[i].end_state)
+                continue;
+            dfa_state::recognition& t = states[i].recognized;
+            for (size_t j = 0; j < 4; ++j)
+            {
+                if (t[j] == uninitialized)
+                {
+                    t[j] = size16_t(idx);
+                    break;
+                }
+            }
+        }
     }
 
     template<size_t N>
@@ -1317,6 +1365,19 @@ struct parser
     }
 
     template<typename Stream>
+    constexpr void write_rule_diag_str(Stream& s, size_t rule_info_idx) const
+    {
+        const rule_info& ri = rule_infos[rule_info_idx];
+        s << nterm_names[ri.l_idx] << " <- ";
+        if (ri.r_elements > 0)
+            s << get_symbol_name(right_sides[ri.r_idx][0]);
+        for (size_t i = 1u; i < ri.r_elements; ++i)
+        {
+            s << " " << get_symbol_name(right_sides[ri.r_idx][i]);
+        }
+    }
+
+    template<typename Stream>
     constexpr void write_situation_diag_str(Stream& s, size_t idx) const
     {
         const situation_address addr = make_situation_address(idx);
@@ -1425,7 +1486,10 @@ struct parser
     constexpr void reduce(ParserState& ps, size_t rule_info_idx) const
     {
         const auto& ri = rule_infos[rule_info_idx];
-        ps.trace_stream << "Reduced using rule " << ri.r_idx << "\n";
+        ps.trace_stream << "Reduced using rule " << ri.r_idx << "  ";
+        write_rule_diag_str(ps.trace_stream, rule_info_idx);
+        ps.trace_stream << "\n";
+
         ps.cursor_stack.erase(ps.cursor_stack.end() - ri.r_elements, ps.cursor_stack.end());
         size_t new_cursor_value = parse_table[ps.cursor_stack.back()][ri.l_idx].shift;
         ps.trace_stream << "Go to " << new_cursor_value << "\n";
@@ -1717,23 +1781,23 @@ diag_msg(const Parser&, MessageStreamUsage)->diag_msg<typename MessageStreamUsag
 template<typename DFAType>
 constexpr auto create_regex_parser(DFAType& sm)
 {
-    using char_list_type = typename DFAType::char_list_type;
-    using char_range_list_type = typename DFAType::char_range_list_type;
+    using dfa_type = DFAType;
+    
     constexpr term regular_char(exclude("\\[]^-.*|()"), 0, associativity::ltor, "regular");
     constexpr nterm<slice> expr("expr");
     constexpr nterm<slice> alt("alt");
     constexpr nterm<slice> concat("concat");
     constexpr nterm<slice> q_expr("q_expr");
     constexpr nterm<slice> primary("primary");
-    constexpr nterm<char_list_type> c_list("c_list");
+    constexpr nterm<char_subset> c_subset("c_subset");
+    constexpr nterm<char_range> c_subset_item("c_subset_item");
     constexpr nterm<char_range> c_range("c_range");
-    constexpr nterm<char_range_list_type> c_ranges("c_ranges");
-    constexpr nterm<char> single_char("single_char");
+    constexpr nterm<char> single_char("single_char");    
 
     return parser(
         expr,
-        terms(regular_char, "\\", "[", "]", "^", "-", ".", "*", "|", "(", ")"),
-        nterms(expr, alt, concat, q_expr, primary, c_list, c_range, c_ranges, single_char),
+        terms(regular_char, "\\", "[", "]", "^", "-", ".", "*", "?", "|", "(", ")"),
+        nterms(expr, alt, concat, q_expr, primary, c_range, c_subset, c_subset_item, single_char),
         rules(
             single_char(regular_char) >= [](str_view s) { return s[0]; },
             single_char("\\", "\\") >= [](skip, str_view s) { return s[0]; },
@@ -1745,20 +1809,19 @@ constexpr auto create_regex_parser(DFAType& sm)
             single_char("\\", "|") >= [](skip, str_view s) { return s[0]; },
             single_char("\\", "(") >= [](skip, str_view s) { return s[0]; },
             single_char("\\", ")") >= [](skip, str_view s) { return s[0]; },
-            c_list(single_char) >= [](char c) { return char_list_type(c, 1); },
-            c_list(single_char, c_list) >= [&sm](char c, char_list_type&& l) { l.push_back(c); return l; },
             c_range(single_char, "-", single_char) >= [](char c1, skip, char c2){ return char_range{c1, c2}; },
-            c_ranges(c_range) >= [](char_range r) { return char_range_list_type(r, 1); },
-            c_ranges(c_range, c_ranges) >= [](char_range r, char_range_list_type&& l) { l.push_back(r); return l; },
+            c_subset_item(single_char) >= [](char c) { return char_range{ c, c}; },
+            c_subset_item(c_range) >= [](char_range r){ return r; },
+            c_subset(c_subset_item) >= [](char_range r){ return dfa_type::char_subset_from_item(r); },
+            c_subset(c_subset_item, c_subset) >= [](char_range r, char_subset&& s){ return dfa_type::add_item_to_char_subset(std::move(s), r); },
             primary(single_char) >= [&sm](char c) { return sm.add_primary_single_char(c); },
             primary(".") >= [&sm](skip) { return sm.add_primary_any_char(); },
-            primary("[", c_list, "]") >= [&sm](skip, char_list_type&& l, skip) { return sm.add_primary_char_list(l); },
-            primary("[", "^", c_list, "]") >= [&sm](skip, skip, char_list_type&& l, skip) { return sm.add_primary_char_list_exclusive(l); },
-            primary("[", c_ranges, "]") >= [&sm](skip, char_range_list_type&& l, skip) { return sm.add_primary_char_ranges(l); },
-            primary("[", "^", c_ranges, "]") >= [&sm](skip, skip, char_range_list_type&& l, skip) { return sm.add_primary_char_ranges_exclusive(l); },
+            primary("[", c_subset, "]") >= [&sm](skip, char_subset&& s, skip) { return sm.add_primary_char_subset(s); },
+            primary("[", "^", c_subset, "]") >= [&sm](skip, skip, char_subset&& s, skip) { return sm.add_primary_char_subset_exclusive(s); },
             primary("(", expr, ")") >= [](skip, slice p, skip) { return p; },
             q_expr(primary) >= [](slice p) { return p; },
             q_expr(primary, "*") >= [&sm](slice p, skip) { return sm.add_multiplication(p); },
+            q_expr(primary, "?") >= [&sm](slice p, skip) { return sm.add_optional(p); },
             concat(q_expr) >= [](slice p) { return p; },
             concat(q_expr, concat) >= [&sm](slice p1, slice p2) { return sm.add_concat(p1, p2); },
             alt(concat) >= [](slice p) { return p; },
@@ -1850,6 +1913,4 @@ parse_result(const Parser&, const Buffer&, ErrorStreamUsage)
 template<typename Parser, typename Buffer>
 parse_result(const Parser&, const Buffer&)
 ->parse_result<typename Parser::root_value_type, typename Parser::context_type, no_stream, no_stream>;
-
-
 

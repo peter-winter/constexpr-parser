@@ -21,7 +21,7 @@ struct rp
     bool valid = true;
 };
 
-constexpr rp<dfa<100, 10>> ob("[1-9][0-9]*");
+constexpr rp<dfa<100, 10>> ob("[A-Z%a-z]");
 
 int main()
 {
