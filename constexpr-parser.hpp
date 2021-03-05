@@ -1,4 +1,5 @@
 #include <utility>
+#include <type_traits>
 #include <cstdint>
 #include <limits>
 #include <tuple>
@@ -273,7 +274,7 @@ struct parse_table_cursor_stack_type
 template<size_t N>
 struct parse_table_cursor_stack_type<cstring_buffer<N>>
 {
-    using type = cvector<size_t, N * 2>;
+    using type = cvector<size_t, N * 2>;    // TODO take empty rules into account
 };
 
 template<typename Buffer>
@@ -292,7 +293,7 @@ struct parser_value_stack_type<cstring_buffer<N>, ValueVariantType, std::enable_
 template<size_t N, typename ValueVariantType>
 struct parser_value_stack_type<cstring_buffer<N>, ValueVariantType, std::enable_if_t<is_cvector_compatible<ValueVariantType>::value>>
 {
-    using type = cvector<ValueVariantType, N * 2>;
+    using type = cvector<ValueVariantType, N * 2>;  // TODO take empty rules into account
 };
 
 template<typename Buffer, typename ValueVariantType>
@@ -307,6 +308,16 @@ struct cstream
         while (*s)
         {
             data[current_size++] = *s++;
+        }
+
+        return *this;
+    }
+
+    constexpr cstream& operator << (str_view v)
+    {
+        for (size_t i = 0; i < v.size; ++i)
+        {
+            data[current_size++] = v.str[i];
         }
 
         return *this;
@@ -349,6 +360,12 @@ struct cstream
 
     char data[MaxSize] = { 0 };
     size_t current_size = 0;
+};
+
+struct no_stream
+{
+    template<typename T>
+    constexpr const no_stream& operator <<(T&&) const { return *this; }
 };
 
 template<size_t N>
@@ -408,7 +425,7 @@ struct nterm
     constexpr const char* get_name() const { return name; }
 
     template<typename... Args>
-    constexpr auto operator()(const Args&... args) const;
+    constexpr auto operator()(Args&&... args) const;
 
     const char* name;
 };
@@ -419,7 +436,7 @@ struct fake_root
     using value_type = ValueType;
 
     template<typename... Args>
-    constexpr auto operator()(const Args&... args) const;
+    constexpr auto operator()(Args&&... args) const;
 
     constexpr static const char* get_name() { return "##"; };
 };
@@ -586,11 +603,11 @@ struct symbol_type<char [N]>
 };
 
 template<typename T>
-using symbol_type_t = typename symbol_type<T>::type;
+using symbol_type_t = typename symbol_type<std::remove_cv_t<std::remove_reference_t<T>>>::type;
 
 template<typename ValueType>
 template<typename... Args>
-constexpr auto nterm<ValueType>::operator()(const Args&... args) const
+constexpr auto nterm<ValueType>::operator()(Args&&... args) const
 {
     using f_type = move_construct<ValueType, value_type_t<symbol_type_t<Args>>...>;
     return rule<f_type, nterm<ValueType>, symbol_type_t<Args>...>(
@@ -602,7 +619,7 @@ constexpr auto nterm<ValueType>::operator()(const Args&... args) const
 
 template<typename ValueType>
 template<typename... Args>
-constexpr auto fake_root<ValueType>::operator()(const Args&... args) const
+constexpr auto fake_root<ValueType>::operator()(Args&&... args) const
 {
     using f_type = move_construct<ValueType, ValueType>;
     return rule<f_type, fake_root<ValueType>, symbol_type_t<Args>...>(
@@ -611,6 +628,97 @@ constexpr auto fake_root<ValueType>::operator()(const Args&... args) const
         std::make_tuple(symbol_type_t<Args>(args)...)
     );
 }
+
+struct dfa_state
+{
+    constexpr dfa_state()
+    {
+        for (auto& t : transitions)
+            t = uninitialized;
+    }
+
+    bool start_state = false;
+    bool end_state = false;
+    size_t recognized_idx = uninitialized;
+    size_t transitions[distinct_values_count<char>] = {};
+};
+
+template<size_t MaxStates, size_t MaxListLength>
+struct dfa
+{
+    using dfa_state_container_type = cvector<dfa_state, MaxStates>;
+    using char_list_type = cvector<char, MaxListLength>;
+
+    constexpr slice add_primary_single_char(char single)
+    {
+        size_t old_size = states.size();
+        //current_size += 2;
+        return slice{ old_size, 2 };
+    }
+
+    constexpr slice add_primary_char_list(const char_list_type& l)
+    {
+        size_t old_size = states.size();
+        //current_size += 2;
+        return slice{ old_size, 2 };
+    }
+
+    constexpr slice add_primary_char_list_exclusive(const char_list_type& l)
+    {
+        size_t old_size = states.size();
+        //current_size += 2;
+        return slice{ old_size, 2 };
+    }
+
+    constexpr slice add_primary_char_range(char c1, char c2)
+    {
+        size_t old_size = states.size();
+        //current_size += 2;
+        return slice{ old_size, 2 };
+    }
+
+    constexpr slice add_primary_char_range_exclusive(char c1, char c2)
+    {
+        size_t old_size = states.size();
+        //current_size += 2;
+        return slice{ old_size, 2 };
+    }
+
+    constexpr slice add_multiplication(slice p)
+    {
+        size_t old_size = states.size();
+        return p;
+    }
+
+    constexpr slice add_concat(slice p1, slice p2)
+    {
+        if (p2.n != 0)
+        {
+
+        }
+        return slice{ p1.start, p1.n + p2.n };
+    }
+
+    constexpr slice add_alt(slice p1, slice p2)
+    {
+        return slice{ p1.start, p1.n + p2.n };
+    }
+
+    constexpr void mark_end_states(slice s, size_t idx)
+    {
+
+    }
+
+    template<size_t N>
+    constexpr size_t match(const char(&r)[N]) const
+    {
+        return uninitialized;
+    }
+
+    constexpr size_t size() const { return states.size(); }
+
+    dfa_state_container_type states = {};
+};
 
 template<typename C>
 struct use_context
@@ -623,12 +731,15 @@ struct no_context
     using type = no_context;
 };
 
+template<typename DFA, size_t SSize, size_t... N, size_t... I>
+constexpr bool create_lexer_impl(DFA& sm, cstream<SSize>& error_stream, bool trace, std::index_sequence<I...>, std::tuple<term<N>...> ts);
+
 template<
     typename RootValueType,
     size_t TermCount, size_t NTermCount, size_t RuleCount,
     size_t MaxRuleElementCount,
-    typename ValueVariantType,
-    typename FunctorTupleType,
+    typename ValueVariantType, typename FunctorTupleType,
+    size_t TotalRegexSize,
     typename ContextType,
     size_t MaxStates
 >
@@ -643,6 +754,7 @@ struct parser
     static const size_t situation_size = max_rule_element_count + 1;
     static const size_t situation_count = rule_count * situation_size * term_count;
     static const size_t root_rule_idx = RuleCount;
+    static const size_t total_regex_size = TotalRegexSize;
 
     using functor_tuple_type = FunctorTupleType;
     using value_variant_type = ValueVariantType;
@@ -755,17 +867,21 @@ struct parser
         std::tuple<Terms...> terms,
         std::tuple<NTerms...> nterms,
         std::tuple<Rules...>&& rules) :
-        functors(make_functors_tuple(std::index_sequence_for<Rules...>{}, std::move(rules)))
+        functors(make_functors_tuple(std::index_sequence_for<Rules...>{}, std::move(rules)))        
     {
         for (size_t& x : trivial_term_table)
             x = uninitialized;
 
+        constexpr auto seq_for_terms = std::index_sequence_for<Terms...>{};
         analyze_nterms(std::index_sequence_for<NTerms...>{}, nterms);
         analyze_nterm(fake_root<RootValueType>{});
-        analyze_terms(std::index_sequence_for<Terms...>{}, terms);
+        analyze_terms(seq_for_terms, terms);
         analyze_eof(eof{});
         analyze_rules(std::index_sequence_for<Rules...>{}, root, std::move(rules));
         analyze_states();
+        
+        if (!trivial_lexical_analyzer)
+            create_lexer_impl(lexer_sm, lexer_error_stream, true, seq_for_terms, terms);
     }
 
     template<typename... Rules, size_t... I>
@@ -846,13 +962,7 @@ struct parser
     {
         return symbol{ false, find_name(nterm_names, nt.name) };
     }
-
-    template<size_t N>
-    constexpr auto make_symbol(const char (&str)[N]) const
-    {
-        return symbol{ true, find_name(term_names, str) };
-    }
-
+    
     template<typename... Terms, size_t... I>
     constexpr void analyze_terms(
         std::index_sequence<I...>,
@@ -1278,7 +1388,7 @@ struct parser
     template<typename ParserState>
     constexpr void shift(ParserState& ps, const str_view& sv, size_t term_idx, size_t new_cursor_value) const
     {
-        ps.trace_stream << "Shift to " << new_cursor_value << "\n";
+        ps.trace_stream << "Shift to " << new_cursor_value << ", term: " << sv << "\n";
         ps.cursor_stack.push_back(new_cursor_value);
         ps.value_stack.emplace_back(sv);
     }
@@ -1309,14 +1419,16 @@ struct parser
     template<typename Stream>
     constexpr void write_syntax_error_to_stream(Stream& stream, const char* error) const
     {
-        stream << "Syntax error: " << error, "\n";
+        stream << "Syntax error: " << error << "\n";
     }
 
     template<typename ParserState>
-    constexpr void syntax_error(ParserState& ps) const
+    constexpr void syntax_error(ParserState& ps, size_t term_idx) const
     {
-        write_syntax_error_to_stream(ps.error_stream, "");
-        write_syntax_error_to_stream(ps.trace_stream, "");
+        cstream<100> str;
+        str << "Unexpected '" << term_names[term_idx] << "'";
+        write_syntax_error_to_stream(ps.error_stream, str.str());
+        write_syntax_error_to_stream(ps.trace_stream, str.str());
     }
 
     template<typename ParserState>
@@ -1373,6 +1485,38 @@ struct parser
         return parse_in_context(buffer, c, error_stream, trace_stream);
     }
 
+    template<typename Buffer, typename ErrorStream, typename = std::enable_if_t<std::is_same_v<context_type, no_context>>>
+    constexpr std::optional<root_value_type> parse(const Buffer& buffer, ErrorStream& error_stream) const
+    {
+        no_context c;
+        no_stream trace_stream;
+        return parse_in_context(buffer, c, error_stream, trace_stream);
+    }
+
+    template<typename Buffer, typename = std::enable_if_t<std::is_same_v<context_type, no_context>>>
+    constexpr std::optional<root_value_type> parse(const Buffer& buffer) const
+    {
+        no_context c;
+        no_stream trace_stream;
+        no_stream error_stream;
+        return parse_in_context(buffer, c, error_stream, trace_stream);
+    }
+
+    template<typename Buffer, typename ErrorStream>
+    constexpr std::optional<root_value_type> parse_in_context(const Buffer& buffer, context_type& context, ErrorStream& error_stream) const
+    {
+        no_stream trace_stream;
+        return parse_in_context(buffer, context, error_stream, trace_stream);
+    }
+
+    template<typename Buffer>
+    constexpr std::optional<root_value_type> parse_in_context(const Buffer& buffer, context_type& context) const
+    {
+        no_stream trace_stream;
+        no_stream error_stream;
+        return parse_in_context(buffer, context, error_stream, trace_stream);
+    }
+
     template<typename Buffer, typename ErrorStream, typename TraceStream>
     constexpr std::optional<root_value_type> parse_in_context(const Buffer& buffer, context_type& context, ErrorStream& error_stream, TraceStream& trace_stream) const
     {
@@ -1420,7 +1564,7 @@ struct parser
             }
             else
             {
-                syntax_error(ps);
+                syntax_error(ps, term_idx);
                 break;
             }
         }
@@ -1452,6 +1596,10 @@ struct parser
     functor_tuple_type functors;
     using value_reductor = value_variant_type(*)(const functor_tuple_type&, value_variant_type*, context_type&);
     value_reductor value_reductors[rule_count] = {};
+    using dfa_type = dfa<total_regex_size * 2, total_regex_size>;
+    dfa_type lexer_sm = {};
+    bool valid_lexer = true;
+    cstream<20000> lexer_error_stream;
 };
 
 template<size_t S>
@@ -1460,7 +1608,6 @@ struct use_max_states
     template<size_t TermCount, size_t... RuleSizes>
     static const size_t value = S;
 };
-
 
 struct deduce_max_states
 {
@@ -1485,6 +1632,7 @@ parser<
     max_v<Rules::n...>,
     unique_types_variant_t<char, term_value_type, NTermValueType...>,
     std::tuple<typename Rules::f_type...>,
+    (0 + ... + N),
     typename ContextUsage::type,
     MaxStateUsage::template value<sizeof...(N), Rules::n...>
 >;
@@ -1538,6 +1686,93 @@ struct diag_msg
 template<typename Parser, typename MessageStreamUsage>
 diag_msg(const Parser&, MessageStreamUsage)->diag_msg<typename MessageStreamUsage::type>;
 
+template<typename DFAType>
+constexpr auto create_regex_parser(DFAType& sm)
+{
+    using char_list_type = typename DFAType::char_list_type;
+    constexpr term regular_char(exclude("\\[]^-.*|()"), 0, associativity::ltor, "regular");
+    constexpr nterm<slice> expr("expr");
+    constexpr nterm<slice> alt("alt");
+    constexpr nterm<slice> concat("concat");
+    constexpr nterm<slice> q_expr("q_expr");
+    constexpr nterm<slice> primary("primary");
+    constexpr nterm<char_list_type> char_list("char_list");
+    constexpr nterm<char> single_char("single_char");
+
+    return parser(
+        expr,
+        terms(regular_char, "\\", "[", "]", "^", "-", ".", "*", "|", "(", ")"),
+        nterms(expr, alt, concat, q_expr, primary, char_list, single_char),
+        rules(
+            single_char(regular_char) >= [](str_view s) { return s[0]; },
+            single_char("\\", "\\") >= [](skip, str_view s) { return s[0]; },
+            single_char("\\", "[") >= [](skip, str_view s) { return s[0]; },
+            single_char("\\", "]") >= [](skip, str_view s) { return s[0]; },
+            single_char("\\", "^") >= [](skip, str_view s) { return s[0]; },
+            single_char("\\", "-") >= [](skip, str_view s) { return s[0]; },
+            single_char("\\", ".") >= [](skip, str_view s) { return s[0]; },
+            single_char("\\", "|") >= [](skip, str_view s) { return s[0]; },
+            single_char("\\", "(") >= [](skip, str_view s) { return s[0]; },
+            single_char("\\", ")") >= [](skip, str_view s) { return s[0]; },
+            char_list() >= []() { return char_list_type{}; },
+            char_list(single_char, char_list) >= [&sm](char c, char_list_type&& l) { l.push_back(c); return l; },
+            primary(single_char) >= [&sm](char c) { return sm.add_primary_single_char(c); },
+            primary("[", char_list, "]") >= [&sm](skip, char_list_type&& l, skip) { return sm.add_primary_char_list(l); },
+            primary("[", "^", char_list, "]") >= [&sm](skip, skip, char_list_type&& l, skip) { return sm.add_primary_char_list_exclusive(l); },
+            primary("[", single_char, "-", single_char, "]") >= [&sm](skip, char c1, skip, char c2, skip) { return sm.add_primary_char_range(c1, c2); },
+            primary("[", "^", single_char, "-", single_char, "]") >= [&sm](skip, skip, char c1, skip, char c2, skip) { return sm.add_primary_char_range_exclusive(c1, c2); },
+            primary("(", expr, ")") >= [](skip, slice p, skip) { return p; },
+            q_expr(primary) >= [](slice p) { return p; },
+            q_expr(primary, "*") >= [&sm](slice p, skip) { return sm.add_multiplication(p); },
+            concat() >= []() { return slice{ 0, 0 }; },
+            concat(q_expr, concat) >= [&sm](slice p1, slice p2) { return sm.add_concat(p1, p2); },
+            alt(concat) >= [](slice p) { return p; },
+            alt(alt, "|", alt) >= [&sm](slice p1, skip, slice p2) { return sm.add_alt(p1, p2); },
+            expr(alt) >= [](slice p) { return p; }
+        ),
+        no_context{},
+        deduce_max_states{}
+    );
+}
+
+template<typename DFA, size_t SSize, size_t... N, size_t... I>
+constexpr bool create_lexer_impl(DFA& sm, cstream<SSize>& error_stream, bool trace, std::index_sequence<I...>, std::tuple<term<N>...> ts)
+{
+    using buffer_type = cstring_buffer<max_v<N...>>;
+    
+    auto p = create_regex_parser(sm);
+    auto parse_f = [&p, &sm, &error_stream, trace](const auto& r, size_t idx)
+    { 
+        cstream<20000> tmp_trace_stream;
+        cstream<2000> tmp_error_stream;
+        bool valid = true;
+        slice prev{0, sm.size()};
+        auto res = p.parse(buffer_type(r), tmp_error_stream, tmp_trace_stream);
+        if (res.has_value())
+        {
+            sm.mark_end_states(res.value(), idx);
+            sm.add_alt(prev, res.value());
+        }
+        else
+        {
+            error_stream << "Regex " << r << " parse error: \n" << tmp_error_stream.str() << "\n";
+            if (trace)
+                error_stream << "Trace: \n\n: " << tmp_trace_stream.str();
+
+            valid = false;
+        }
+        return valid;
+    };
+
+    return (true && ... && parse_f(std::get<I>(ts).data, I));
+}
+
+template<typename DFA, size_t SSize, size_t... N>
+constexpr bool create_lexer(DFA& sm, cstream<SSize>& error_stream, bool trace, std::tuple<term<N>...> ts)
+{
+    return create_lexer_impl(sm, error_stream, trace, std::make_index_sequence<sizeof...(N)>{}, ts);
+}
+
 template<typename ValueType, typename ContextType, typename ErrorStreamType, typename TraceStreamType>
 struct parse_result
 {
@@ -1567,12 +1802,6 @@ struct parse_result
     constexpr const auto& get_value() const { return value.value(); }
     constexpr bool get_success() const { return value.has_value(); }
     constexpr const auto& get_context() const { return context; }
-};
-
-struct no_stream
-{
-    template<typename T>
-    constexpr const no_stream& operator <<(T&&) const { return *this; }
 };
 
 template<typename Parser, typename Buffer, typename ErrorStreamUsage, typename TraceStreamUsage>
