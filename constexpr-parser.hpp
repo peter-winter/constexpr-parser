@@ -26,7 +26,7 @@ struct slice
 };
 
 template<typename T>
-struct is_cvector_compatible : std::bool_constant<std::is_default_constructible_v<T>&& std::is_trivially_destructible_v<T>>
+struct is_cvector_compatible : std::bool_constant<std::is_default_constructible_v<T> && std::is_trivially_destructible_v<T>>
 {};
 
 template<typename T, size_t N, typename = void>
@@ -704,7 +704,7 @@ struct dfa
         for (size_t i = 0; i < std::size(s); ++i)
             if (s[i])
             {
-                transition& t = states.back().transitions[i = states.size()];
+                states.back().transitions[i] = states.size();
             }
         states.push_back(dfa_state());
         states.back().end_state = true;
@@ -728,10 +728,10 @@ struct dfa
 
     constexpr slice add_multiplication(slice s)
     {
-        size_t b = states[s.start];
-        for (size_t i = s.start; i < s.start + s.size; ++i)
+        size_t b = s.start;
+        for (size_t i = s.start; i < s.start + s.n; ++i)
         {
-            if (s.end_state)
+            if (states[i].end_state)
                 merge(b, i);
         }
         return s;
@@ -745,21 +745,21 @@ struct dfa
 
     constexpr slice add_concat(slice s1, slice s2)
     {
-        size_t b = states[s2.start];
-        for (size_t i = s1.start; i < s1.start + s1.size; ++i)
+        size_t b = s2.start;
+        for (size_t i = s1.start; i < s1.start + s1.n; ++i)
         {
             if (states[i].end_state)
                 merge(i, b);
         }
-        return slice{ p1.start, p1.n + p2.n };
+        return slice{ s1.start, s1.n + s2.n };
     }
 
     constexpr slice add_alt(slice s1, slice s2)
     {
-        size_t b1 = states[s1.start];
-        size_t b2 = states[s2.start];
+        size_t b1 = s1.start;
+        size_t b2 = s2.start;
         merge(b1, b2);
-        return slice{ p1.start, p1.n + p2.n };
+        return slice{ s1.start, s1.n + s2.n };
     }
 
     constexpr void merge(size_t to, size_t from)
@@ -769,16 +769,16 @@ struct dfa
 
     constexpr void mark_end_states(slice s, size_t idx)
     {
-        for (size_t i = s.start; i < s.start + s.size; ++i)
+        for (size_t i = s.start; i < s.start + s.n; ++i)
         {
             if (!states[i].end_state)
                 continue;
             dfa_state::recognition& t = states[i].recognized;
             for (size_t j = 0; j < 4; ++j)
             {
-                if (t[j] == uninitialized)
+                if (t.conflicted[j] == uninitialized)
                 {
-                    t[j] = size16_t(idx);
+                    t.conflicted[j] = size16_t(idx);
                     break;
                 }
             }
@@ -808,7 +808,12 @@ struct no_context
 };
 
 template<typename DFA, size_t SSize, size_t... N, size_t... I>
-constexpr bool create_lexer_impl(DFA& sm, cstream<SSize>& error_stream, bool trace, std::index_sequence<I...>, std::tuple<term<N>...> ts);
+constexpr bool create_lexer_impl(DFA& sm, cstream<SSize>& error_stream, std::index_sequence<I...>, std::tuple<term<N>...> ts);
+
+struct parse_options
+{
+    bool verbose = false;
+};
 
 template<
     typename RootValueType,
@@ -895,20 +900,20 @@ struct parser
     static const size_t value_stack_initial_capacity = 1 << 10;
     static const size_t cursor_stack_initial_capacity = 1 << 10;
 
-    template<typename CursorStack, typename ValueStack, typename ErrorStream, typename TraceStream>
+    template<typename CursorStack, typename ValueStack, typename ErrorStream>
     struct parser_state
     {
         constexpr parser_state(
             CursorStack& cursor_stack,
             ValueStack& value_stack,
             ErrorStream& error_stream,
-            TraceStream& trace_stream,
-            context_type& context) :
+            context_type& context,
+            parse_options options) :
             cursor_stack(cursor_stack),
             value_stack(value_stack),
             error_stream(error_stream),
-            trace_stream(trace_stream),
-            context(context)
+            context(context),
+            options(options)
         {
             cursor_stack.reserve(cursor_stack_initial_capacity);
             value_stack.reserve(value_stack_initial_capacity);
@@ -917,8 +922,8 @@ struct parser
         CursorStack& cursor_stack;
         ValueStack& value_stack;
         ErrorStream& error_stream;
-        TraceStream& trace_stream;
         context_type& context;
+        parse_options options;
     };
 
     constexpr static size_t get_parse_table_idx(bool term, size_t idx)
@@ -957,7 +962,7 @@ struct parser
         analyze_states();
         
         if (!trivial_lexical_analyzer)
-            create_lexer_impl(lexer_sm, lexer_error_stream, true, seq_for_terms, terms);
+            create_lexer_impl(lexer_sm, lexer_error_stream, seq_for_terms, terms);
     }
 
     template<typename... Rules, size_t... I>
@@ -1443,20 +1448,25 @@ struct parser
     template<typename Stream>
     constexpr void write_diag_str(Stream& s) const
     {
+        s << "PARSER" << "\n" << "\n";
+
         s << "Parser Object size: " << sizeof(*this) << "\n\n";
         for (size_t i = 0; i < state_count; ++i)
         {
             write_state_diag_str(s, i);
             s << "\n";
         }
-    }
 
-    template<typename Stream>
-    constexpr void write_unexpected_character_to_stream(Stream& stream, char c) const
-    {
-        stream << "Unexpected character: " << c << "\n";
+        s << "\n" << "LEXICAL ANALYZER" << "\n" << "\n";
+        if (valid_lexer)
+        {
+            if (trivial_lexical_analyzer)
+                s << "Trivial lookup" << "\n";
+        }
+        else
+            s << lexer_error_stream.str();
     }
-
+    
     template<typename F, typename LValueType, typename... RValueType, size_t... I>
     constexpr static LValueType reduce_value_impl(const F& f, value_variant_type* start, std::index_sequence<I...>, context_type& context)
     {
@@ -1477,7 +1487,8 @@ struct parser
     template<typename ParserState>
     constexpr void shift(ParserState& ps, const str_view& sv, size_t term_idx, size_t new_cursor_value) const
     {
-        ps.trace_stream << "Shift to " << new_cursor_value << ", term: " << sv << "\n";
+        if (ps.options.verbose)
+            ps.error_stream << "Shift to " << new_cursor_value << ", term: " << sv << "\n";
         ps.cursor_stack.push_back(new_cursor_value);
         ps.value_stack.emplace_back(sv);
     }
@@ -1486,14 +1497,21 @@ struct parser
     constexpr void reduce(ParserState& ps, size_t rule_info_idx) const
     {
         const auto& ri = rule_infos[rule_info_idx];
-        ps.trace_stream << "Reduced using rule " << ri.r_idx << "  ";
-        write_rule_diag_str(ps.trace_stream, rule_info_idx);
-        ps.trace_stream << "\n";
+        if (ps.options.verbose)
+        {
+            ps.error_stream << "Reduced using rule " << ri.r_idx << "  ";
+            write_rule_diag_str(ps.error_stream, rule_info_idx);
+            ps.error_stream << "\n";
+        }
 
         ps.cursor_stack.erase(ps.cursor_stack.end() - ri.r_elements, ps.cursor_stack.end());
         size_t new_cursor_value = parse_table[ps.cursor_stack.back()][ri.l_idx].shift;
-        ps.trace_stream << "Go to " << new_cursor_value << "\n";
-        ps.cursor_stack.push_back(new_cursor_value);
+        
+        if (ps.options.verbose)
+        {
+            ps.error_stream << "Go to " << new_cursor_value << "\n";
+            ps.cursor_stack.push_back(new_cursor_value);
+        }
 
         value_variant_type* start = ps.value_stack.data() + ps.value_stack.size() - ri.r_elements;
         value_variant_type lvalue(value_reductors[ri.r_idx](functors, start, ps.context));
@@ -1504,34 +1522,34 @@ struct parser
     template<typename ParserState>
     constexpr void rr_conflict(ParserState& ps, size_t rule_idx) const
     {
-        ps.trace_stream << "R/R conflict encountered \n";
+        if (ps.options.verbose)
+        {
+            ps.error_stream << "R/R conflict encountered \n";
+        }
         reduce(ps, rule_idx);
     }
 
-    template<typename Stream>
-    constexpr void write_syntax_error_to_stream(Stream& stream, const char* error) const
-    {
-        stream << "Syntax error: " << error << "\n";
-    }
 
     template<typename ParserState>
     constexpr void syntax_error(ParserState& ps, size_t term_idx) const
     {
         cstream<100> str;
         str << "Unexpected '" << term_names[term_idx] << "'";
-        write_syntax_error_to_stream(ps.error_stream, str.str());
-        write_syntax_error_to_stream(ps.trace_stream, str.str());
+        ps.error_stream << "Syntax error: " << str.str() << "\n";
     }
 
     template<typename ParserState>
     constexpr root_value_type& success(ParserState& ps) const
     {
-        ps.trace_stream << "Success \n";
+        if (ps.options.verbose)
+        {
+            ps.error_stream << "Success \n";
+        }
         return std::get<root_value_type>(ps.value_stack.front());
     }
 
-    template<typename It, typename ErrorStream, typename TraceStream>
-    constexpr auto get_next_term_trivial(const It& start, const It& end, ErrorStream& error_stream, TraceStream& trace_stream) const
+    template<typename It, typename ErrorStream>
+    constexpr auto get_next_term_trivial(const It& start, const It& end, ErrorStream& error_stream) const
     {
         size_t term_idx = uninitialized;
         size_t term_size = uninitialized;
@@ -1548,73 +1566,72 @@ struct parser
             term_size = 1;
         }
 
-        if (term_idx != uninitialized)
-        {
-            trace_stream << "Recognized " << term_names[term_idx] << " \n";
-            it++;
-        }
-        else
-        {
-            write_unexpected_character_to_stream(error_stream, *it);
-            write_unexpected_character_to_stream(trace_stream, *it);
-        }
         return std::make_pair(term_idx, term_size);
     }
 
-    template<typename It, typename ErrorStream, typename TraceStream>
-    constexpr auto get_next_term(const It& start, const It& end, ErrorStream& error_stream, TraceStream& trace_stream) const
+    template<typename It, typename ErrorStream>
+    constexpr auto get_next_term(const It& start, const It& end, ErrorStream& error_stream) const
     {
         if (trivial_lexical_analyzer)
-            return get_next_term_trivial(start, end, error_stream, trace_stream);
+            return get_next_term_trivial(start, end, error_stream);
         else
             throw std::runtime_error("not implemented yet");
     }
 
-    template<typename Buffer, typename ErrorStream, typename TraceStream, typename = std::enable_if_t<std::is_same_v<context_type, no_context>>>
-    constexpr std::optional<root_value_type> parse(const Buffer& buffer, ErrorStream& error_stream, TraceStream& trace_stream) const
+    template<typename ParserState>
+    constexpr void unexpected_char(ParserState& ps, char c) const
     {
-        no_context c;
-        return parse_in_context(buffer, c, error_stream, trace_stream);
+        ps.error_stream << "Unexpected character: " << c << "\n";
     }
 
-    template<typename Buffer, typename ErrorStream, typename = std::enable_if_t<std::is_same_v<context_type, no_context>>>
-    constexpr std::optional<root_value_type> parse(const Buffer& buffer, ErrorStream& error_stream) const
+    template<typename ParserState>
+    constexpr void recognized_term(ParserState& ps, size_t term_idx) const
     {
-        no_context c;
-        no_stream trace_stream;
-        return parse_in_context(buffer, c, error_stream, trace_stream);
+        if (ps.options.verbose)
+            ps.error_stream << "Recognized " << term_names[term_idx] << " \n";
     }
 
     template<typename Buffer, typename = std::enable_if_t<std::is_same_v<context_type, no_context>>>
     constexpr std::optional<root_value_type> parse(const Buffer& buffer) const
     {
         no_context c;
-        no_stream trace_stream;
-        no_stream error_stream;
-        return parse_in_context(buffer, c, error_stream, trace_stream);
+        return parse_in_context(parse_options{}, buffer, c, no_stream{});
     }
 
-    template<typename Buffer, typename ErrorStream>
-    constexpr std::optional<root_value_type> parse_in_context(const Buffer& buffer, context_type& context, ErrorStream& error_stream) const
+    template<typename Buffer, typename ErrorStream, typename = std::enable_if_t<std::is_same_v<context_type, no_context>>>
+    constexpr std::optional<root_value_type> parse(const Buffer& buffer, ErrorStream& error_stream) const
     {
-        no_stream trace_stream;
-        return parse_in_context(buffer, context, error_stream, trace_stream);
+        no_context c;
+        return parse_in_context(parse_options{}, buffer, c, error_stream);
+    }
+
+    template<typename Buffer, typename ErrorStream, typename = std::enable_if_t<std::is_same_v<context_type, no_context>>>
+    constexpr std::optional<root_value_type> parse(parse_options options, const Buffer& buffer, ErrorStream& error_stream) const
+    {
+        no_context c;
+        return parse_in_context(options, buffer, c, error_stream);
     }
 
     template<typename Buffer>
     constexpr std::optional<root_value_type> parse_in_context(const Buffer& buffer, context_type& context) const
     {
-        no_stream trace_stream;
         no_stream error_stream;
-        return parse_in_context(buffer, context, error_stream, trace_stream);
+        return parse_in_context(parse_options{}, buffer, context, error_stream);
     }
 
-    template<typename Buffer, typename ErrorStream, typename TraceStream>
-    constexpr std::optional<root_value_type> parse_in_context(const Buffer& buffer, context_type& context, ErrorStream& error_stream, TraceStream& trace_stream) const
+    template<typename Buffer>
+    constexpr std::optional<root_value_type> parse_in_context(parse_options options, const Buffer& buffer, context_type& context) const
+    {
+        no_stream error_stream;
+        return parse_in_context(options, buffer, context, error_stream);
+    }
+
+    template<typename Buffer, typename ErrorStream>
+    constexpr std::optional<root_value_type> parse_in_context(parse_options options, const Buffer& buffer, context_type& context, ErrorStream& error_stream) const
     {
         parser_value_stack_type_t<Buffer, ValueVariantType> value_stack{};
         parse_table_cursor_stack_type_t<Buffer> cursor_stack{};
-        parser_state ps(cursor_stack, value_stack, error_stream, trace_stream, context);
+        parser_state ps(cursor_stack, value_stack, error_stream, context, options);
 
         bool error = false;
         typename Buffer::iterator it = buffer.begin();
@@ -1630,14 +1647,22 @@ struct parser
             size_t cursor = ps.cursor_stack.back();
             if (next_term_needed)
             {
-                auto res = get_next_term(it, buffer.end(), error_stream, trace_stream);
+                auto res = get_next_term(it, buffer.end(), error_stream);
                 term_idx = res.first;
                 term_size = res.second;
                 next_term_needed = false;
             }
-            if (term_idx == uninitialized)
-                break;
 
+            if (term_idx == uninitialized)
+            {
+                unexpected_char(ps, *it);
+                break;
+            }
+            else
+            {
+                recognized_term(ps, term_idx);
+            }
+            
             const auto& entry = parse_table[cursor][get_parse_table_idx(true, term_idx)];
             if (entry.kind == parse_table_entry_kind::shift)
             {
@@ -1834,29 +1859,29 @@ constexpr auto create_regex_parser(DFAType& sm)
 }
 
 template<typename DFA, size_t SSize, size_t... N, size_t... I>
-constexpr bool create_lexer_impl(DFA& sm, cstream<SSize>& error_stream, bool trace, std::index_sequence<I...>, std::tuple<term<N>...> ts)
+constexpr bool create_lexer_impl(DFA& sm, cstream<SSize>& error_stream, std::index_sequence<I...>, std::tuple<term<N>...> ts)
 {
     using buffer_type = cstring_buffer<max_v<N...>>;
     
     auto p = create_regex_parser(sm);
-    auto parse_f = [&p, &sm, &error_stream, trace](const auto& r, size_t idx)
+    auto parse_f = [&p, &sm, &error_stream](const auto& r, size_t idx)
     { 
-        cstream<20000> tmp_trace_stream;
-        cstream<2000> tmp_error_stream;
         bool valid = true;
         slice prev{0, sm.size()};
-        auto res = p.parse(buffer_type(r), tmp_error_stream, tmp_trace_stream);
+        std::optional<slice> res;
+        {
+            cstream<SSize> stream;
+            res = p.parse(buffer_type(r), stream);
+            error_stream << "Regex " << r << " parse error: \n" << stream.str() << "\n";
+        }
+
         if (res.has_value())
         {
             sm.mark_end_states(res.value(), idx);
             sm.add_alt(prev, res.value());
         }
         else
-        {
-            error_stream << "Regex " << r << " parse error: \n" << tmp_error_stream.str() << "\n";
-            if (trace)
-                error_stream << "Trace: \n\n: " << tmp_trace_stream.str();
-
+        {   
             valid = false;
         }
         return valid;
@@ -1866,51 +1891,62 @@ constexpr bool create_lexer_impl(DFA& sm, cstream<SSize>& error_stream, bool tra
 }
 
 template<typename DFA, size_t SSize, size_t... N>
-constexpr bool create_lexer(DFA& sm, cstream<SSize>& error_stream, bool trace, std::tuple<term<N>...> ts)
+constexpr bool create_lexer(DFA& sm, cstream<SSize>& error_stream, std::tuple<term<N>...> ts)
 {
-    return create_lexer_impl(sm, error_stream, trace, std::make_index_sequence<sizeof...(N)>{}, ts);
+    return create_lexer_impl(sm, error_stream, std::make_index_sequence<sizeof...(N)>{}, ts);
 }
 
-template<typename ValueType, typename ContextType, typename ErrorStreamType, typename TraceStreamType>
+template<typename ValueType, typename ContextType, typename ErrorStreamType>
 struct parse_result
 {
     ErrorStreamType error_stream;
-    TraceStreamType trace_stream;
     std::optional<ValueType> value;
     ContextType context;
-
-    template<typename Parser, typename Buffer, typename ErrorStreamUsage, typename TraceStreamUsage>
-    constexpr parse_result(const Parser& p, const Buffer& buffer, ErrorStreamUsage, TraceStreamUsage) :
-        parse_result(p, buffer)
-    {}
+    parse_options options;
 
     template<typename Parser, typename Buffer, typename ErrorStreamUsage>
-    constexpr parse_result(const Parser& p, const Buffer& buffer, ErrorStreamUsage) :
-        parse_result(p, buffer)
-    {}
+    constexpr parse_result(const Parser& p, parse_options options, const Buffer& buffer, ErrorStreamUsage)
+    {
+        value = p.parse_in_context(options, buffer, context, error_stream);
+    }
+
+    template<typename Parser, typename Buffer, typename ErrorStreamUsage>
+    constexpr parse_result(const Parser& p, const Buffer& buffer, ErrorStreamUsage)
+    {
+        value = p.parse_in_context(parse_options{}, buffer, context, error_stream);
+    }
     
+    template<typename Parser, typename Buffer>
+    constexpr parse_result(const Parser& p, parse_options options, const Buffer& buffer)
+    {
+        value = p.parse_in_context(options, buffer, context, error_stream);
+    }
+
     template<typename Parser, typename Buffer>
     constexpr parse_result(const Parser& p, const Buffer& buffer)
     {
-        value = p.parse_in_context(buffer, context, error_stream, trace_stream);
+        value = p.parse_in_context(parse_options{}, buffer, context, error_stream);
     }
 
     constexpr const auto& get_error_stream() const { return error_stream; }
-    constexpr const auto& get_trace_stream() const { return trace_stream; }
     constexpr const auto& get_value() const { return value.value(); }
     constexpr bool get_success() const { return value.has_value(); }
     constexpr const auto& get_context() const { return context; }
 };
 
-template<typename Parser, typename Buffer, typename ErrorStreamUsage, typename TraceStreamUsage>
-parse_result(const Parser&, const Buffer&, ErrorStreamUsage, TraceStreamUsage)
-->parse_result<typename Parser::root_value_type, typename Parser::context_type, typename ErrorStreamUsage::type, typename TraceStreamUsage::type>;
+template<typename Parser, typename Buffer, typename ErrorStreamUsage>
+parse_result(const Parser&, parse_options, const Buffer&, ErrorStreamUsage)
+->parse_result<typename Parser::root_value_type, typename Parser::context_type, typename ErrorStreamUsage::type>;
 
 template<typename Parser, typename Buffer, typename ErrorStreamUsage>
 parse_result(const Parser&, const Buffer&, ErrorStreamUsage)
-->parse_result<typename Parser::root_value_type, typename Parser::context_type, typename ErrorStreamUsage::type, no_stream>;
+->parse_result<typename Parser::root_value_type, typename Parser::context_type, typename ErrorStreamUsage::type>;
+
+template<typename Parser, typename Buffer>
+parse_result(const Parser&, parse_options, const Buffer&)
+->parse_result<typename Parser::root_value_type, typename Parser::context_type, no_stream>;
 
 template<typename Parser, typename Buffer>
 parse_result(const Parser&, const Buffer&)
-->parse_result<typename Parser::root_value_type, typename Parser::context_type, no_stream, no_stream>;
+->parse_result<typename Parser::root_value_type, typename Parser::context_type, no_stream>;
 

@@ -49,26 +49,24 @@ constexpr parser p(
 );
 
 constexpr diag_msg diag(p, use_const_message<40000>{});
-
-constexpr parse_result res_ok(p, cstring_buffer("-((1+2)*2)/2"), use_const_message<1000>{}, use_const_message<1000>{});
-constexpr parse_result res_fail(p, cstring_buffer("(()"), use_const_message<1000>{}, use_const_message<1000>{});
+constexpr parse_options opts{true};
+constexpr parse_result res_ok(p, opts, cstring_buffer("-((1+2)*2)/2"), use_const_message<10000>{});
+constexpr parse_result res_fail(p, opts, cstring_buffer("(()"), use_const_message<10000>{});
 
 constexpr auto v = res_ok.get_value();
-constexpr const char* error = res_fail.get_error_stream().str();
 
-constexpr const char* diag_str = diag.get_stream().str();
-
-constexpr const char* res_ok_trace = res_ok.get_trace_stream().str();
-constexpr const char* res_fail_trace = res_fail.get_trace_stream().str();
+constexpr const char* error_ok = res_ok.get_error_stream().str();
+constexpr const char* error_fail = res_fail.get_error_stream().str();
 
 int main()
 {
-    std::cout << res_ok_trace << std::endl;
+    std::cout << diag.get_stream().str() << std::endl;
+
+    std::cout << error_ok << std::endl;
     std::cout << "Value: " << v << std::endl << std::endl;
     
     std::cout << "Fail case" << std::endl;
-    std::cout << res_fail_trace << std::endl;
-    std::cout << error << std::endl;
+    std::cout << error_fail << std::endl;
 
     return 0;
 }
