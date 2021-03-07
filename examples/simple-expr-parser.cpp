@@ -49,20 +49,16 @@ constexpr parser p(
 );
 
 constexpr diag_msg diag(p, use_const_message<40000>{});
-constexpr parse_options opts{true};
-constexpr parse_result res_ok(p, opts, cstring_buffer("-((1+2)*2)/2"), use_const_message<10000>{});
-constexpr parse_result res_fail(p, opts, cstring_buffer("(()"), use_const_message<10000>{});
+
+constexpr parse_result res_ok(p, cstring_buffer("-((1+2)*2)/2"), use_const_message<10000>{});
+constexpr parse_result res_fail(p, cstring_buffer("(()"), use_const_message<10000>{});
 
 constexpr auto v = res_ok.get_value();
 
-constexpr const char* error_ok = res_ok.get_error_stream().str();
 constexpr const char* error_fail = res_fail.get_error_stream().str();
 
 int main()
 {
-    std::cout << diag.get_stream().str() << std::endl;
-
-    std::cout << error_ok << std::endl;
     std::cout << "Value: " << v << std::endl << std::endl;
     
     std::cout << "Fail case" << std::endl;

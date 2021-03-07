@@ -274,7 +274,7 @@ constexpr size_t char_to_idx(char c)
     return size_t(int(c) - std::numeric_limits<char>::min());
 }
 
-constexpr char index_to_char(size_t idx)
+constexpr char idx_to_char(size_t idx)
 {
     return char(int(idx) + std::numeric_limits<char>::min());
 }
@@ -658,7 +658,8 @@ struct dfa_state
         size16_t conflicted[4] = { uninitialized16, uninitialized16, uninitialized16, uninitialized16 };
     };
     recognition recognized;
-    size_t transitions[distinct_values_count<char>] = {};
+    static const size_t transitions_size = distinct_values_count<char>;
+    size_t transitions[transitions_size] = {};
 };
 
 struct char_range
@@ -676,6 +677,7 @@ struct dfa
     
     constexpr static char_subset char_subset_from_item(char_range r)
     {
+        std::cout << "Range: " << r.start << r.end << std::endl;
         char_subset res{};
         for (size_t i = char_to_idx(r.start); i <= char_to_idx(r.end); ++i)
             res[i] = true;
@@ -764,34 +766,83 @@ struct dfa
 
     constexpr void merge(size_t to, size_t from)
     {
+        if (to == from)
+            return;
+        dfa_state& s_from = states[from];
+        dfa_state& s_to = states[to];
+        s_from.start_state = false;
+        s_to.end_state = s_from.end_state;
 
+        for (size_t i = 0; i < dfa_state::transitions_size; ++i)
+        {
+            size_t& tr_from = s_from.transitions[i];
+            if (tr_from == uninitialized)
+                continue;
+            size_t& tr_to = s_to.transitions[i];            
+            if (tr_to == uninitialized)
+                tr_to = tr_from;
+            else
+                merge(tr_to, tr_from);
+        }
+
+        auto& t = s_from.recognized;
+        for (size_t j = 0; j < 4; ++j)
+        {
+            size_t term_idx = t.conflicted[j];
+            if (term_idx != uninitialized)
+                mark_end_state(states[to], term_idx);
+            else
+                break;
+        }
+    }
+
+    constexpr void mark_end_state(dfa_state& s, size_t idx)
+    {
+        auto& r = s.recognized;
+        for (size_t j = 0; j < 4; ++j)
+        {
+            if (s.end_state)
+                continue;
+            if (r.conflicted[j] == uninitialized)
+            {
+                r.conflicted[j] = size16_t(idx);
+                break;
+            }
+        }
     }
 
     constexpr void mark_end_states(slice s, size_t idx)
     {
         for (size_t i = s.start; i < s.start + s.n; ++i)
         {
-            if (!states[i].end_state)
-                continue;
-            dfa_state::recognition& t = states[i].recognized;
-            for (size_t j = 0; j < 4; ++j)
-            {
-                if (t.conflicted[j] == uninitialized)
-                {
-                    t.conflicted[j] = size16_t(idx);
-                    break;
-                }
-            }
+            mark_end_state(states[i], idx);
         }
     }
 
-    template<size_t N>
-    constexpr size_t match(const char(&r)[N]) const
+    constexpr size_t size() const { return states.size(); }
+
+    template<typename Stream>
+    constexpr void write_state_diag_str(const dfa_state& st, Stream& s) const
     {
-        return uninitialized;
+        for (size_t i = 0; i < dfa_state::transitions_size; ++i)
+        {
+            if (st.transitions[i] == uninitialized)
+                continue;
+            s << "On " << idx_to_char(i) << " -> " << st.transitions[i] << "\n";
+        }
+        s << "\n";
     }
 
-    constexpr size_t size() const { return states.size(); }
+    template<typename Stream>
+    constexpr void write_diag_str(Stream& s) const
+    {
+        for (size_t i = 0; i < states.size(); ++i)
+        {
+            s << "STATE " << i << "\n";
+            write_state_diag_str(states[i], s);
+            s << "\n";
+        }
+    }
 
     dfa_state_container_type states = {};
 };
@@ -987,7 +1038,7 @@ struct parser
         {
             for (size_t i = 0; i < std::size(trivial_term_table); ++i)
             {
-                size_t idx_found = find_char(index_to_char(i), t.data);
+                size_t idx_found = find_char(idx_to_char(i), t.data);
                 if (idx_found == uninitialized)
                     trivial_term_table[i] = idx;
             }
@@ -1462,6 +1513,8 @@ struct parser
         {
             if (trivial_lexical_analyzer)
                 s << "Trivial lookup" << "\n";
+            else
+                lexer_sm.write_diag_str(s);
         }
         else
             s << lexer_error_stream.str();
@@ -1510,9 +1563,9 @@ struct parser
         if (ps.options.verbose)
         {
             ps.error_stream << "Go to " << new_cursor_value << "\n";
-            ps.cursor_stack.push_back(new_cursor_value);
         }
 
+        ps.cursor_stack.push_back(new_cursor_value);
         value_variant_type* start = ps.value_stack.data() + ps.value_stack.size() - ri.r_elements;
         value_variant_type lvalue(value_reductors[ri.r_idx](functors, start, ps.context));
         ps.value_stack.erase(ps.value_stack.end() - ri.r_elements, ps.value_stack.end());
