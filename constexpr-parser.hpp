@@ -8,7 +8,7 @@
 #include <vector>
 #include <optional>
 #include <variant>
-#include <array>
+#include <bitset>
 
 using size_t = std::uint64_t;
 using size8_t = std::uint8_t;
@@ -668,33 +668,35 @@ struct char_range
     char end;
 };
 
-using char_subset = cvector<bool, distinct_values_count<char>>;
+using char_subset = std::bitset<distinct_values_count<char>>;
 
-template<size_t MaxStates, size_t MaxListLength>
+template<size_t MaxStates>
 struct dfa
 {
     using dfa_state_container_type = cvector<dfa_state, MaxStates>;
     
     constexpr static char_subset char_subset_from_item(char_range r)
     {
-        std::cout << "Range: " << r.start << r.end << std::endl;
         char_subset res{};
         for (size_t i = char_to_idx(r.start); i <= char_to_idx(r.end); ++i)
+        {
             res[i] = true;
+        }    
         return res;
     }
     
     constexpr static char_subset add_item_to_char_subset(char_subset&& s, char_range r)
     {
         for (size_t i = char_to_idx(r.start); i <= char_to_idx(r.end); ++i)
-            s[i] = true;
+            s.set(i);
+        
         return s;
     }
     
     constexpr slice add_primary_single_char(char c)
     {
         char_subset s;
-        s[char_to_idx(c)] = true;
+        s.set(char_to_idx(c));
         return add_primary_char_subset(s);
     }
 
@@ -704,7 +706,7 @@ struct dfa
         states.push_back(dfa_state());
         states.back().start_state = true;
         for (size_t i = 0; i < std::size(s); ++i)
-            if (s[i])
+            if (s.test(i))
             {
                 states.back().transitions[i] = states.size();
             }
@@ -715,16 +717,14 @@ struct dfa
 
     constexpr slice add_primary_char_subset_exclusive(char_subset& s)
     {
-        for (bool& b : s)
-            b = !b;
+        s.flip();
         return add_primary_char_subset(s);
     }
 
     constexpr slice add_primary_any_char()
     {
         char_subset s;
-        for (bool& b : s)
-            b = true;
+        s.set();
         return add_primary_char_subset(s);
     }
 
@@ -840,7 +840,6 @@ struct dfa
         {
             s << "STATE " << i << "\n";
             write_state_diag_str(states[i], s);
-            s << "\n";
         }
     }
 
@@ -877,6 +876,7 @@ template<
 >
 struct parser
 {
+    static const size_t max_states = MaxStates;
     static const size_t max_rule_element_count = MaxRuleElementCount;
     static const size_t term_count = TermCount + 1;
     static const size_t eof_idx = TermCount;
@@ -884,14 +884,15 @@ struct parser
     static const size_t fake_root_idx = NTermCount;
     static const size_t rule_count = RuleCount + 1;
     static const size_t situation_size = max_rule_element_count + 1;
-    static const size_t situation_count = rule_count * situation_size * term_count;
+    static const size_t situation_address_space_size = rule_count * situation_size * term_count;
     static const size_t root_rule_idx = RuleCount;
     static const size_t total_regex_size = TotalRegexSize;
 
     using functor_tuple_type = FunctorTupleType;
     using value_variant_type = ValueVariantType;
-    using term_subset = bool[term_count];
-    using state = bool[situation_count];
+    using term_subset = std::bitset<term_count>;
+    using nterm_subset = std::bitset<nterm_count>;
+    using state = std::bitset<situation_address_space_size>;
     using root_value_type = RootValueType;
     using context_type = ContextType;
 
@@ -1193,7 +1194,7 @@ struct parser
     constexpr void add_term_subset(term_subset& dest, const term_subset& source)
     {
         for (size_t i = 0u; i < term_count; ++i)
-            dest[i] = dest[i] || source[i];
+            dest.set(i, dest.test(i) || source.test(i));
     }
 
     constexpr const term_subset& make_right_side_slice_first(const rule_info& ri, size_t start, term_subset& res)
@@ -1203,7 +1204,7 @@ struct parser
             const symbol& s = right_sides[ri.r_idx][i];
             if (s.term)
             {
-                res[s.idx] = true;
+                res.set(s.idx) = true;
                 break;
             }
             add_term_subset(res, make_nterm_first(s.idx));
@@ -1215,9 +1216,9 @@ struct parser
 
     constexpr const term_subset& make_nterm_first(size_t nt)
     {
-        if (nterm_first_analyzed[nt])
+        if (nterm_first_analyzed.test(nt))
             return nterm_first[nt];
-        nterm_first_analyzed[nt] = true;
+        nterm_first_analyzed.set(nt);
 
         const slice& s = nterm_rule_slices[nt];
         for (size_t i = 0u; i < s.n; ++i)
@@ -1248,19 +1249,19 @@ struct parser
 
     constexpr bool make_nterm_empty(size_t nt)
     {
-        if (nterm_empty_analyzed[nt])
-            return nterm_empty[nt];
-        nterm_empty_analyzed[nt] = true;
+        if (nterm_empty_analyzed.test(nt))
+            return nterm_empty.test(nt);
+        nterm_empty_analyzed.set(nt);
 
         const slice& s = nterm_rule_slices[nt];
         for (size_t i = 0u; i < s.n; ++i)
         {
             if (is_right_side_empty(rule_infos[s.start + i]))
             {
-                return (nterm_empty[nt] = true);
+                return (nterm_empty.set(nt), true);
             }
         }
-        return (nterm_empty[nt] = false);
+        return (nterm_empty.reset(nt), false);
     }
 
     constexpr const term_subset& make_situation_first_after(const situation_address& addr, size_t idx)
@@ -1296,10 +1297,10 @@ struct parser
 
     constexpr void add_situation_to_state(size_t state_idx, size_t idx)
     {
-        bool& b = states[state_idx][idx];
-        if (!b)
+        state& s = states[state_idx];
+        if (!s.test(idx))
         {
-            b = true;
+            s.set(idx);
             situation_queue[situation_queue_size++] = { state_idx, idx };
         }
     }
@@ -1391,7 +1392,7 @@ struct parser
         size_t new_state_idx = uninitialized;
         for (size_t i = 0; i < state_count; ++i)
         {
-            if (states[i][new_idx])
+            if (states[i].test(new_idx))
             {
                 new_state_idx = i;
                 break;
@@ -1456,9 +1457,9 @@ struct parser
     {
         s << "STATE " << idx << "\n";
 
-        for (size_t i = 0u; i < situation_count; ++i)
+        for (size_t i = 0u; i < situation_address_space_size; ++i)
         {
-            if (states[idx][i])
+            if (states[idx].test(i))
             {
                 write_situation_diag_str(s, i);
                 s << "\n";
@@ -1747,15 +1748,15 @@ struct parser
     symbol right_sides[rule_count][max_rule_element_count] = { };
     rule_info rule_infos[rule_count] = { };
     slice nterm_rule_slices[nterm_count] = { };
-    term_subset situation_first_after[situation_count] = { };
-    bool nterm_empty[nterm_count] = { };
+    term_subset situation_first_after[situation_address_space_size] = { };
+    nterm_subset nterm_empty = { };
     term_subset nterm_first[nterm_count] = { };
-    bool nterm_empty_analyzed[nterm_count] = { };
-    bool nterm_first_analyzed[nterm_count] = { };
-    state states[MaxStates] = { };
-    parse_table_entry parse_table[MaxStates][term_count + nterm_count] = {};
+    nterm_subset nterm_empty_analyzed = { };
+    nterm_subset nterm_first_analyzed = { };
+    state states[max_states] = { };
+    parse_table_entry parse_table[max_states][term_count + nterm_count] = {};
     size_t state_count = 0;
-    situation_queue_entry situation_queue[MaxStates * situation_count] = { };
+    situation_queue_entry situation_queue[max_states * rule_count + max_states] = { };
     size_t situation_queue_size = 0;
     int term_precedences[term_count] = { };
     associativity term_associativities[term_count] = { associativity::ltor };
@@ -1766,7 +1767,7 @@ struct parser
     functor_tuple_type functors;
     using value_reductor = value_variant_type(*)(const functor_tuple_type&, value_variant_type*, context_type&);
     value_reductor value_reductors[rule_count] = {};
-    using dfa_type = dfa<total_regex_size * 2, total_regex_size>;
+    using dfa_type = dfa<total_regex_size * 2>;
     dfa_type lexer_sm = {};
     bool valid_lexer = true;
     cstream<20000> lexer_error_stream;

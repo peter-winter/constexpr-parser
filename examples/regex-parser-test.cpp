@@ -7,7 +7,8 @@ struct rp
     template<size_t N>
     rp(const char(&r)[N])
     {
-        auto p = create_regex_parser(sm);
+        static auto p = create_regex_parser(sm);
+        std::cout << sizeof(p) << std::endl;
         p.write_diag_str(diag_stream);
         parse_options opts;
         opts.verbose = true;
@@ -24,10 +25,11 @@ struct rp
     bool valid = true;
 };
 
-rp<dfa<100, 10>> ob("[A-Z]");
+rp<dfa<100>> ob("[A-Z]");
 
 int main()
 {
+    //std::cout << ob.diag_stream.str();
     std::cout << "\nRegex verbose parse: \n\n";
     std::cout << ob.error_stream.str() << "\n";
     std::cout << ob.sm_diag_stream.str();
