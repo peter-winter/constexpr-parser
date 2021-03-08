@@ -356,39 +356,39 @@ constexpr char idx_to_char(size_t idx)
     return char(int(idx) + std::numeric_limits<char>::min());
 }
 
-template<typename Buffer>
+template<typename Buffer, size_t EmptyRulesCount>
 struct parse_table_cursor_stack_type
 {
     using type = std::vector<size16_t>;
 };
 
-template<size_t N>
-struct parse_table_cursor_stack_type<cstring_buffer<N>>
+template<size_t N, size_t EmptyRulesCount>
+struct parse_table_cursor_stack_type<cstring_buffer<N>, EmptyRulesCount>
 {
-    using type = cvector<size16_t, N * 2>;    // TODO take empty rules into account
+    using type = cvector<size16_t, N + EmptyRulesCount + 1>;
 };
 
-template<typename Buffer>
-using parse_table_cursor_stack_type_t = typename parse_table_cursor_stack_type<Buffer>::type;
+template<typename Buffer, size_t EmptyRulesCount>
+using parse_table_cursor_stack_type_t = typename parse_table_cursor_stack_type<Buffer, EmptyRulesCount>::type;
 
-template<typename Buffer, typename ValueVariantType, typename = void>
+template<typename Buffer, size_t EmptyRulesCount, typename ValueVariantType, typename = void>
 struct parser_value_stack_type
 {};
 
-template<size_t N, typename ValueVariantType>
-struct parser_value_stack_type<cstring_buffer<N>, ValueVariantType, std::enable_if_t<!is_cvector_compatible<ValueVariantType>::value>>
+template<size_t N, size_t EmptyRulesCount, typename ValueVariantType>
+struct parser_value_stack_type<cstring_buffer<N>, EmptyRulesCount, ValueVariantType, std::enable_if_t<!is_cvector_compatible<ValueVariantType>::value>>
 {
     using type = std::vector<ValueVariantType>;
 };
 
-template<size_t N, typename ValueVariantType>
-struct parser_value_stack_type<cstring_buffer<N>, ValueVariantType, std::enable_if_t<is_cvector_compatible<ValueVariantType>::value>>
+template<size_t N, size_t EmptyRulesCount, typename ValueVariantType>
+struct parser_value_stack_type<cstring_buffer<N>, EmptyRulesCount, ValueVariantType, std::enable_if_t<is_cvector_compatible<ValueVariantType>::value>>
 {
-    using type = cvector<ValueVariantType, N * 2>;  // TODO take empty rules into account
+    using type = cvector<ValueVariantType, N + EmptyRulesCount + 1>;
 };
 
-template<typename Buffer, typename ValueVariantType>
-using parser_value_stack_type_t = typename parser_value_stack_type<Buffer, ValueVariantType>::type;
+template<typename Buffer, size_t EmptyRulesCount, typename ValueVariantType>
+using parser_value_stack_type_t = typename parser_value_stack_type<Buffer, EmptyRulesCount, ValueVariantType>::type;
 
 template<size_t MaxSize>
 struct cstream
@@ -500,6 +500,9 @@ struct max<X>
 
 template<size_t... X>
 constexpr size_t max_v = max<X...>::value;
+
+template<size_t... X>
+constexpr size_t count_zeros = (0 + ... + (X == 0 ? 1 : 0));
 
 template<typename ValueType>
 struct nterm
@@ -945,6 +948,7 @@ struct parse_options
 template<
     typename RootValueType,
     size_t TermCount, size_t NTermCount, size_t RuleCount,
+    size_t EmptyRulesCount,
     size_t MaxRuleElementCount,
     typename ValueVariantType, typename FunctorTupleType,
     size_t TotalRegexSize,
@@ -960,6 +964,7 @@ struct parser
     static const size_t nterm_count = NTermCount + 1;
     static const size_t fake_root_idx = NTermCount;
     static const size_t rule_count = RuleCount + 1;
+    static const size_t empty_rules_count = EmptyRulesCount;
     static const size_t situation_size = max_rule_element_count + 1;
     static const size_t situation_address_space_size = rule_count * situation_size * term_count;
     static const size_t root_rule_idx = RuleCount;
@@ -1772,8 +1777,8 @@ struct parser
     template<typename Buffer, typename ErrorStream>
     constexpr std::optional<root_value_type> parse_in_context(parse_options options, const Buffer& buffer, context_type& context, ErrorStream& error_stream) const
     {
-        parser_value_stack_type_t<Buffer, ValueVariantType> value_stack{};
-        parse_table_cursor_stack_type_t<Buffer> cursor_stack{};
+        parser_value_stack_type_t<Buffer, empty_rules_count, value_variant_type> value_stack{};
+        parse_table_cursor_stack_type_t<Buffer, empty_rules_count> cursor_stack{};
         parser_state ps(cursor_stack, value_stack, error_stream, context, options);
 
         bool error = false;
@@ -1892,6 +1897,7 @@ parser<
     sizeof...(N),
     sizeof...(NTermValueType),
     sizeof...(Rules),
+    count_zeros<Rules::n...>,
     max_v<Rules::n...>,
     unique_types_variant_t<char, term_value_type, NTermValueType...>,
     std::tuple<typename Rules::f_type...>,
