@@ -5,10 +5,9 @@ template<typename DFA>
 struct rp
 {
     template<size_t N>
-    rp(const char(&r)[N])
+    constexpr rp(const char(&r)[N])
     {
-        static auto p = create_regex_parser(sm);
-        std::cout << sizeof(p) << std::endl;
+        auto p = create_regex_parser(sm);
         p.write_diag_str(diag_stream);
         parse_options opts;
         opts.verbose = true;
@@ -25,7 +24,7 @@ struct rp
     bool valid = true;
 };
 
-rp<dfa<100>> ob("[A-Z]");
+constexpr rp<dfa<100>> ob("[A-Z]");
 
 int main()
 {

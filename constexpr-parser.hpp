@@ -8,7 +8,6 @@
 #include <vector>
 #include <optional>
 #include <variant>
-#include <bitset>
 
 using size_t = std::uint64_t;
 using size8_t = std::uint8_t;
@@ -21,22 +20,22 @@ constexpr size32_t uninitialized32 = size32_t(-1);
 
 struct slice
 {
-    size_t start;
-    size_t n;
+    size32_t start;
+    size32_t n;
 };
 
 template<typename T>
 struct is_cvector_compatible : std::bool_constant<std::is_default_constructible_v<T> && std::is_trivially_destructible_v<T>>
 {};
 
-template<typename T, size_t N, typename = void>
+template<typename T, std::size_t N, typename = void>
 struct cvector
 {};
 
-template<typename T, size_t N>
+template<typename T, std::size_t N>
 struct cvector<T, N, std::enable_if_t<is_cvector_compatible<T>::value>>
 {
-    using size_type = size_t;
+    using size_type = std::size_t;
     
     constexpr cvector() :
         the_data{}, current_size(0)
@@ -143,6 +142,84 @@ struct str_view
 
     const char* str;
     size_t size;
+};
+
+template<std::size_t N>
+struct cbitset
+{
+    using size_type = std::size_t;
+
+    using underlying_type = std::uint64_t;
+
+    constexpr cbitset& set(size_type idx)
+    {
+        check_idx(idx);
+        data[idx / underlying_size] |= (underlying_type(1) << (idx % underlying_size));
+        return *this;
+    }
+
+    constexpr cbitset& set(size_type idx, bool value)
+    {
+        check_idx(idx);
+        data[idx / underlying_size] ^= (-!!value ^ data[idx / underlying_size]) & (underlying_type(1) << (idx % underlying_size));
+        return *this;
+    }
+
+    constexpr cbitset& reset(size_type idx)
+    {
+        check_idx(idx);
+        data[idx / underlying_size] &= ~(underlying_type(1) << (idx % underlying_size));
+        return *this;
+    }
+
+    constexpr cbitset& flip(size_type idx)
+    {
+        check_idx(idx);
+        data[idx / underlying_size] ^= (underlying_type(1) << (idx % underlying_size));
+        return *this;
+    }
+    
+    constexpr bool test(size_type idx) const
+    {
+        check_idx(idx);
+        return (data[idx / underlying_size] >> (idx % underlying_size)) & underlying_type(1);
+    }
+
+    constexpr void check_idx(size_type idx) const
+    {
+        if (idx >= N)
+            throw std::runtime_error("Index access out of range");
+    }
+
+    constexpr cbitset& flip()
+    {
+        for (auto& d : data)
+            d = ~d;
+        return *this;
+    }
+
+    constexpr cbitset& set()
+    {
+        for (auto& d : data)
+            d = underlying_type(-1);
+        return *this;
+    }
+
+    constexpr cbitset& reset()
+    {
+        for (auto& d : data)
+            d = underlying_type(0);
+        return *this;
+    }
+
+    constexpr size_type size() const
+    {
+        return N;
+    }
+
+    static const size_type underlying_size = sizeof(underlying_type) * 8;
+    static const size_type underlying_count = (N / underlying_size) + ((N % underlying_size) ? 1 : 0);
+    underlying_type data[underlying_count] = {};
 };
 
 template<typename Container, typename Pred>
@@ -282,13 +359,13 @@ constexpr char idx_to_char(size_t idx)
 template<typename Buffer>
 struct parse_table_cursor_stack_type
 {
-    using type = std::vector<size_t>;
+    using type = std::vector<size16_t>;
 };
 
 template<size_t N>
 struct parse_table_cursor_stack_type<cstring_buffer<N>>
 {
-    using type = cvector<size_t, N * 2>;    // TODO take empty rules into account
+    using type = cvector<size16_t, N * 2>;    // TODO take empty rules into account
 };
 
 template<typename Buffer>
@@ -643,23 +720,31 @@ constexpr auto fake_root<ValueType>::operator()(Args&&... args) const
     );
 }
 
+using conflicted_terms = size16_t[4];
+
+constexpr void add_conflicted_term(conflicted_terms& ts, size16_t t)
+{
+    for (size_t i = 0; i < 4; ++i)
+        if (ts[i] == uninitialized16)
+        {
+            ts[i] = t;
+            break;
+        }
+}
+
 struct dfa_state
 {
     constexpr dfa_state()
     {
         for (auto& t : transitions)
-            t = uninitialized;
+            t = uninitialized16;
     }
 
-    bool start_state = false;
-    bool end_state = false;
-    struct recognition
-    {
-        size16_t conflicted[4] = { uninitialized16, uninitialized16, uninitialized16, uninitialized16 };
-    };
-    recognition recognized;
+    size8_t start_state = false;
+    size8_t end_state = false;
+    conflicted_terms conflicted_recognition = { uninitialized16, uninitialized16, uninitialized16, uninitialized16 };
     static const size_t transitions_size = distinct_values_count<char>;
-    size_t transitions[transitions_size] = {};
+    size16_t transitions[transitions_size] = {};
 };
 
 struct char_range
@@ -668,7 +753,7 @@ struct char_range
     char end;
 };
 
-using char_subset = std::bitset<distinct_values_count<char>>;
+using char_subset = cbitset<distinct_values_count<char>>;
 
 template<size_t MaxStates>
 struct dfa
@@ -680,7 +765,7 @@ struct dfa
         char_subset res{};
         for (size_t i = char_to_idx(r.start); i <= char_to_idx(r.end); ++i)
         {
-            res[i] = true;
+            res.set(i);
         }    
         return res;
     }
@@ -708,11 +793,11 @@ struct dfa
         for (size_t i = 0; i < std::size(s); ++i)
             if (s.test(i))
             {
-                states.back().transitions[i] = states.size();
+                states.back().transitions[i] = size16_t(states.size());
             }
         states.push_back(dfa_state());
         states.back().end_state = true;
-        return slice{ old_size, 2 };
+        return slice{ size32_t(old_size), 2 };
     }
 
     constexpr slice add_primary_char_subset_exclusive(char_subset& s)
@@ -775,21 +860,21 @@ struct dfa
 
         for (size_t i = 0; i < dfa_state::transitions_size; ++i)
         {
-            size_t& tr_from = s_from.transitions[i];
-            if (tr_from == uninitialized)
+            size16_t& tr_from = s_from.transitions[i];
+            if (tr_from == uninitialized16)
                 continue;
-            size_t& tr_to = s_to.transitions[i];            
-            if (tr_to == uninitialized)
+            size16_t& tr_to = s_to.transitions[i];            
+            if (tr_to == uninitialized16)
                 tr_to = tr_from;
             else
                 merge(tr_to, tr_from);
         }
 
-        auto& t = s_from.recognized;
+        auto& cr = s_from.conflicted_recognition;
         for (size_t j = 0; j < 4; ++j)
         {
-            size_t term_idx = t.conflicted[j];
-            if (term_idx != uninitialized)
+            size_t term_idx = cr[j];
+            if (term_idx != uninitialized16)
                 mark_end_state(states[to], term_idx);
             else
                 break;
@@ -798,17 +883,9 @@ struct dfa
 
     constexpr void mark_end_state(dfa_state& s, size_t idx)
     {
-        auto& r = s.recognized;
-        for (size_t j = 0; j < 4; ++j)
-        {
-            if (s.end_state)
-                continue;
-            if (r.conflicted[j] == uninitialized)
-            {
-                r.conflicted[j] = size16_t(idx);
-                break;
-            }
-        }
+        if (!s.end_state)
+            return;        
+        add_conflicted_term(s.conflicted_recognition, idx);
     }
 
     constexpr void mark_end_states(slice s, size_t idx)
@@ -826,9 +903,9 @@ struct dfa
     {
         for (size_t i = 0; i < dfa_state::transitions_size; ++i)
         {
-            if (st.transitions[i] == uninitialized)
+            if (st.transitions[i] == uninitialized16)
                 continue;
-            s << "On " << idx_to_char(i) << " -> " << st.transitions[i] << "\n";
+            s << idx_to_char(i) << " -> " << st.transitions[i] << "   ";
         }
         s << "\n";
     }
@@ -890,49 +967,50 @@ struct parser
 
     using functor_tuple_type = FunctorTupleType;
     using value_variant_type = ValueVariantType;
-    using term_subset = std::bitset<term_count>;
-    using nterm_subset = std::bitset<nterm_count>;
-    using state = std::bitset<situation_address_space_size>;
+    using term_subset = cbitset<term_count>;
+    using nterm_subset = cbitset<nterm_count>;
+    using right_side_slice_subset = cbitset<max_rule_element_count * rule_count>;
+    using state = cbitset<situation_address_space_size>;
     using root_value_type = RootValueType;
     using context_type = ContextType;
 
     struct symbol
     {
         constexpr symbol() :
-            term(false), idx(uninitialized)
+            term(false), idx(uninitialized16)
         {}
 
-        constexpr symbol(bool term, size_t idx) :
+        constexpr symbol(bool term, size16_t idx) :
             term(term), idx(idx)
         {}
 
-        constexpr size_t get_parse_table_idx() const
+        constexpr size16_t get_parse_table_idx() const
         {
             return parser::get_parse_table_idx(term, idx);
         }
 
         bool term;
-        size_t idx;
+        size16_t idx;
     };
 
     struct situation_address
     {
-        size_t rule_info_idx;
-        size_t after;
-        size_t t;
+        size16_t rule_info_idx;
+        size16_t after;
+        size16_t t;
     };
 
     struct rule_info
     {
-        size_t l_idx;
-        size_t r_idx;
-        size_t r_elements;
+        size16_t l_idx;
+        size16_t r_idx;
+        size16_t r_elements;
     };
 
     struct situation_queue_entry
     {
-        size_t state_idx;
-        size_t idx;
+        size16_t state_idx;
+        size32_t idx;
     };
 
     enum class parse_table_entry_kind : size16_t { error, success, shift, reduce, rr_conflict };
@@ -978,7 +1056,7 @@ struct parser
         parse_options options;
     };
 
-    constexpr static size_t get_parse_table_idx(bool term, size_t idx)
+    constexpr static size16_t get_parse_table_idx(bool term, size16_t idx)
     {
         return term ? nterm_count + idx : idx;
     }
@@ -1002,8 +1080,9 @@ struct parser
         std::tuple<Rules...>&& rules) :
         functors(make_functors_tuple(std::index_sequence_for<Rules...>{}, std::move(rules)))        
     {
-        for (size_t& x : trivial_term_table)
-            x = uninitialized;
+        for (auto& x : trivial_term_table)
+            for (size_t i = 0; i < 4; ++i)
+                x[i] = uninitialized16;
 
         constexpr auto seq_for_terms = std::index_sequence_for<Terms...>{};
         analyze_nterms(std::index_sequence_for<NTerms...>{}, nterms);
@@ -1031,17 +1110,17 @@ struct parser
     }
 
     template<size_t N>
-    constexpr void analyze_trivial_term(term<N> t, size_t idx)
+    constexpr void analyze_trivial_term(term<N> t, size16_t idx)
     {
         if (t.method == term_method::exact)
-            trivial_term_table[char_to_idx(t.data[0])] = idx;
+            add_conflicted_term(trivial_term_table[char_to_idx(t.data[0])], idx);
         else if (t.method == term_method::exclude)
         {
             for (size_t i = 0; i < std::size(trivial_term_table); ++i)
             {
                 size_t idx_found = find_char(idx_to_char(i), t.data);
                 if (idx_found == uninitialized)
-                    trivial_term_table[i] = idx;
+                    add_conflicted_term(trivial_term_table[i], idx);
             }
         }
         else if (t.method == term_method::include)
@@ -1049,14 +1128,14 @@ struct parser
             const char* data = t.data;
             while (*data)
             {
-                trivial_term_table[*data] = idx;
+                add_conflicted_term(trivial_term_table[*data], idx);
                 ++data;
             }                
         }
     }
 
     template<size_t N>
-    constexpr void analyze_term(term<N> t, size_t idx)
+    constexpr void analyze_term(term<N> t, size16_t idx)
     {
         const char* name = t.name;
         int precedence = t.precedence;
@@ -1073,7 +1152,7 @@ struct parser
     }
 
     template<typename ValueType>
-    constexpr void analyze_nterm(nterm<ValueType> nt, size_t idx)
+    constexpr void analyze_nterm(nterm<ValueType> nt, size16_t idx)
     {
         nterm_names[idx] = nt.name;
     }
@@ -1087,13 +1166,13 @@ struct parser
     template<size_t N>
     constexpr auto make_symbol(term<N> t) const
     {
-        return symbol{ true, find_name(term_names, t.name) };
+        return symbol{ true, size16_t(find_name(term_names, t.name)) };
     }
 
     template<typename ValueType>
     constexpr auto make_symbol(nterm<ValueType> nt) const
     {
-        return symbol{ false, find_name(nterm_names, nt.name) };
+        return symbol{ false, size16_t(find_name(nterm_names, nt.name)) };
     }
     
     template<typename... Terms, size_t... I>
@@ -1126,8 +1205,8 @@ struct parser
 
     constexpr void make_nterm_rule_slices()
     {
-        size_t nt = 0;
-        for (size_t i = 0u; i < rule_count; ++i)
+        size16_t nt = 0;
+        for (size16_t i = 0u; i < rule_count; ++i)
         {
             if (nt != rule_infos[i].l_idx)
             {
@@ -1140,7 +1219,7 @@ struct parser
         }
     }
 
-    constexpr size_t calculate_rule_last_term(size_t rule_idx, size_t rule_size) const
+    constexpr size16_t calculate_rule_last_term(size16_t rule_idx, size16_t rule_size) const
     {
         for (int i = int(rule_size - 1); i >= 0; --i)
         {
@@ -1149,15 +1228,15 @@ struct parser
                 continue;
             return s.idx;
         }
-        return uninitialized;
+        return uninitialized16;
     }
 
-    constexpr int calculate_rule_precedence(int precedence, size_t rule_idx, size_t rule_size) const
+    constexpr int calculate_rule_precedence(int precedence, size16_t rule_idx, size16_t rule_size) const
     {
         if (precedence != 0)
             return precedence;
-        size_t last_term_idx = rule_last_terms[rule_idx];
-        if (last_term_idx != uninitialized)
+        size16_t last_term_idx = rule_last_terms[rule_idx];
+        if (last_term_idx != uninitialized16)
             return term_precedences[last_term_idx];
         return 0;
     }
@@ -1165,10 +1244,10 @@ struct parser
     template<size_t Nr, typename F, typename L, typename... R, size_t... I>
     constexpr void analyze_rule(rule<F, L, R...>&& r, std::index_sequence<I...>)
     {
-        size_t l_idx = find_name(nterm_names, r.l.get_name());
+        size16_t l_idx = size16_t(find_name(nterm_names, r.l.get_name()));
         (void(right_sides[Nr][I] = make_symbol(std::get<I>(r.r))), ...);
-        constexpr size_t rule_elements_count = sizeof...(R);
-        rule_infos[Nr] = { l_idx, Nr, rule_elements_count };
+        constexpr size16_t rule_elements_count = size16_t(sizeof...(R));
+        rule_infos[Nr] = { l_idx, size16_t(Nr), rule_elements_count };
         rule_last_terms[Nr] = calculate_rule_last_term(Nr, rule_elements_count);
         rule_precedences[Nr] = calculate_rule_precedence(r.precedence, Nr, rule_elements_count);
         if constexpr (Nr != root_rule_idx)
@@ -1177,34 +1256,41 @@ struct parser
         }
     }
 
-    constexpr size_t make_situation_idx(situation_address a) const
+    constexpr size32_t make_situation_idx(situation_address a) const
     {
         return a.rule_info_idx * situation_size * term_count + a.after * term_count + a.t;
     }
 
-    constexpr situation_address make_situation_address(size_t idx) const
+    constexpr situation_address make_situation_address(size32_t idx) const
     {
-        size_t t = idx % term_count;
+        size16_t t = idx % term_count;
         idx /= term_count;
-        size_t after = idx % situation_size;
-        size_t rule_info_idx = idx / situation_size;
+        size16_t after = idx % situation_size;
+        size16_t rule_info_idx = idx / situation_size;
         return situation_address{ rule_info_idx, after, t };
     }
 
     constexpr void add_term_subset(term_subset& dest, const term_subset& source)
     {
         for (size_t i = 0u; i < term_count; ++i)
-            dest.set(i, dest.test(i) || source.test(i));
+            dest.set(i, source.test(i));
     }
 
-    constexpr const term_subset& make_right_side_slice_first(const rule_info& ri, size_t start, term_subset& res)
+    constexpr const term_subset& make_right_side_slice_first(const rule_info& ri, size_t start)
     {
+        size_t right_side_slice_idx = max_rule_element_count * ri.r_idx + start;
+        auto& res = right_side_slice_first[right_side_slice_idx];
+
+        if (right_side_slice_first_analyzed.test(right_side_slice_idx))
+            return res;
+        right_side_slice_first_analyzed.set(right_side_slice_idx);
+            
         for (size_t i = start; i < ri.r_elements; ++i)
         {
             const symbol& s = right_sides[ri.r_idx][i];
             if (s.term)
             {
-                res.set(s.idx) = true;
+                res.set(s.idx);
                 break;
             }
             add_term_subset(res, make_nterm_first(s.idx));
@@ -1214,7 +1300,7 @@ struct parser
         return res;
     }
 
-    constexpr const term_subset& make_nterm_first(size_t nt)
+    constexpr const term_subset& make_nterm_first(size16_t nt)
     {
         if (nterm_first_analyzed.test(nt))
             return nterm_first[nt];
@@ -1224,7 +1310,7 @@ struct parser
         for (size_t i = 0u; i < s.n; ++i)
         {
             const rule_info& ri = rule_infos[s.start + i];
-            make_right_side_slice_first(ri, 0, nterm_first[nt]);
+            add_term_subset(nterm_first[nt], make_right_side_slice_first(ri, 0));
         }
         return nterm_first[nt];
     }
@@ -1247,7 +1333,7 @@ struct parser
         return is_right_side_slice_empty(ri, 0);
     }
 
-    constexpr bool make_nterm_empty(size_t nt)
+    constexpr bool make_nterm_empty(size16_t nt)
     {
         if (nterm_empty_analyzed.test(nt))
             return nterm_empty.test(nt);
@@ -1264,24 +1350,27 @@ struct parser
         return (nterm_empty.reset(nt), false);
     }
 
-    constexpr const term_subset& make_situation_first_after(const situation_address& addr, size_t idx)
+    constexpr const term_subset& make_situation_first_after(const situation_address& addr, size32_t idx)
     {
-        const rule_info& ri = rule_infos[addr.rule_info_idx];
-        make_right_side_slice_first(ri, addr.after + 1, situation_first_after[idx]);
-        if (is_right_side_slice_empty(ri, addr.after + 1))
-            situation_first_after[idx][addr.t] = true;
+        if (situation_first_after_analyzed.test(idx))
+            return situation_first_after[idx];
+        situation_first_after_analyzed.set(idx);
 
+        const rule_info& ri = rule_infos[addr.rule_info_idx];
+        add_term_subset(situation_first_after[idx], make_right_side_slice_first(ri, addr.after + 1));
+        if (is_right_side_slice_empty(ri, addr.after + 1))
+            situation_first_after[idx].set(addr.t);
         return situation_first_after[idx];
     }
 
     constexpr void analyze_states()
     {
         situation_address root_situation_address{ root_rule_idx, 0, eof_idx };
-        size_t idx = make_situation_idx(root_situation_address);
+        size32_t idx = make_situation_idx(root_situation_address);
         state_count = 1;
         add_situation_to_state(0, idx);
 
-        size_t n = 0;
+        size32_t n = 0;
         while (n != situation_queue_size)
         {
             analyze_situation(situation_queue[n].state_idx, situation_queue[n].idx);
@@ -1289,13 +1378,13 @@ struct parser
         }
     }
 
-    constexpr void analyze_situation(size_t state_idx, size_t idx)
+    constexpr void analyze_situation(size16_t state_idx, size32_t idx)
     {
         situation_closure(state_idx, idx);
         situation_transition(state_idx, idx);
     }
 
-    constexpr void add_situation_to_state(size_t state_idx, size_t idx)
+    constexpr void add_situation_to_state(size16_t state_idx, size32_t idx)
     {
         state& s = states[state_idx];
         if (!s.test(idx))
@@ -1305,7 +1394,7 @@ struct parser
         }
     }
 
-    constexpr void situation_closure(size_t state_idx, size_t idx)
+    constexpr void situation_closure(size16_t state_idx, size32_t idx)
     {
         situation_address addr = make_situation_address(idx);
         const rule_info& ri = rule_infos[addr.rule_info_idx];
@@ -1315,16 +1404,16 @@ struct parser
         const symbol& s = right_sides[ri.r_idx][addr.after];
         if (!s.term)
         {
-            size_t nt = s.idx;
+            size16_t nt = s.idx;
             const term_subset& first = make_situation_first_after(addr, idx);
             const slice& s = nterm_rule_slices[nt];
             for (auto i = 0u; i < s.n; ++i)
             {
-                for (size_t t = 0; t < term_count; ++t)
+                for (size16_t t = 0; t < term_count; ++t)
                 {
-                    if (first[t])
+                    if (first.test(t))
                     {
-                        size_t new_s_idx = make_situation_idx(situation_address{ s.start + i, 0, t });
+                        size32_t new_s_idx = make_situation_idx(situation_address{ size16_t(s.start + i), 0, t });
                         add_situation_to_state(state_idx, new_s_idx);
                     }
                 }
@@ -1332,9 +1421,9 @@ struct parser
         }
     }
 
-    constexpr auto solve_conflict(size_t rule_info_idx, size_t term_idx) const
+    constexpr auto solve_conflict(size16_t rule_info_idx, size16_t term_idx) const
     {
-        size_t rule_idx = rule_infos[rule_info_idx].r_idx;
+        size16_t rule_idx = rule_infos[rule_info_idx].r_idx;
         int r_p = rule_precedences[rule_idx];
         int t_p = term_precedences[term_idx];
         if (r_p > t_p)
@@ -1342,21 +1431,21 @@ struct parser
 
         if (r_p == t_p && term_associativities[term_idx] == associativity::ltor)
         {
-            size_t last_term_idx = rule_last_terms[rule_idx];
+            size16_t last_term_idx = rule_last_terms[rule_idx];
             if (last_term_idx == term_idx)
                 return parse_table_entry_kind::reduce;
         }
         return parse_table_entry_kind::shift;
     }
 
-    constexpr void situation_transition(size_t state_idx, size_t idx)
+    constexpr void situation_transition(size16_t state_idx, size32_t idx)
     {
         situation_address addr = make_situation_address(idx);
         const rule_info& ri = rule_infos[addr.rule_info_idx];
         bool reduction = addr.after >= ri.r_elements;
 
         const auto& s = right_sides[ri.r_idx][addr.after];
-        size_t symbol_idx = reduction ? get_parse_table_idx(true, addr.t) : s.get_parse_table_idx();
+        size16_t symbol_idx = reduction ? get_parse_table_idx(true, addr.t) : s.get_parse_table_idx();
         auto& entry = parse_table[state_idx][symbol_idx];
         if (reduction)
         {
@@ -1380,8 +1469,8 @@ struct parser
             return;
         }
 
-        situation_address new_addr = situation_address{ addr.rule_info_idx, addr.after + 1, addr.t };
-        size_t new_idx = make_situation_idx(new_addr);
+        situation_address new_addr = situation_address{ addr.rule_info_idx, size16_t(addr.after + 1), addr.t };
+        size32_t new_idx = make_situation_idx(new_addr);
 
         if (entry.has_shift)
         {
@@ -1389,8 +1478,8 @@ struct parser
             return;
         }
 
-        size_t new_state_idx = uninitialized;
-        for (size_t i = 0; i < state_count; ++i)
+        size16_t new_state_idx = uninitialized16;
+        for (size16_t i = 0; i < state_count; ++i)
         {
             if (states[i].test(new_idx))
             {
@@ -1398,7 +1487,7 @@ struct parser
                 break;
             }
         }
-        if (new_state_idx == uninitialized)
+        if (new_state_idx == uninitialized16)
         {
             new_state_idx = state_count;
             ++state_count;
@@ -1412,7 +1501,7 @@ struct parser
         {
             entry.kind = parse_table_entry_kind::shift;
         };
-        entry.set_shift(size16_t(new_state_idx));
+        entry.set_shift(new_state_idx);
         add_situation_to_state(new_state_idx, new_idx);
     }
 
@@ -1422,7 +1511,7 @@ struct parser
     }
 
     template<typename Stream>
-    constexpr void write_rule_diag_str(Stream& s, size_t rule_info_idx) const
+    constexpr void write_rule_diag_str(Stream& s, size16_t rule_info_idx) const
     {
         const rule_info& ri = rule_infos[rule_info_idx];
         s << nterm_names[ri.l_idx] << " <- ";
@@ -1435,7 +1524,7 @@ struct parser
     }
 
     template<typename Stream>
-    constexpr void write_situation_diag_str(Stream& s, size_t idx) const
+    constexpr void write_situation_diag_str(Stream& s, size32_t idx) const
     {
         const situation_address addr = make_situation_address(idx);
         const rule_info& ri = rule_infos[addr.rule_info_idx];
@@ -1453,7 +1542,7 @@ struct parser
     }
 
     template<typename Stream>
-    constexpr void write_state_diag_str(Stream& s, size_t idx) const
+    constexpr void write_state_diag_str(Stream& s, size16_t idx) const
     {
         s << "STATE " << idx << "\n";
 
@@ -1503,7 +1592,7 @@ struct parser
         s << "PARSER" << "\n" << "\n";
 
         s << "Parser Object size: " << sizeof(*this) << "\n\n";
-        for (size_t i = 0; i < state_count; ++i)
+        for (size16_t i = 0; i < state_count; ++i)
         {
             write_state_diag_str(s, i);
             s << "\n";
@@ -1539,7 +1628,7 @@ struct parser
     }
 
     template<typename ParserState>
-    constexpr void shift(ParserState& ps, const str_view& sv, size_t term_idx, size_t new_cursor_value) const
+    constexpr void shift(ParserState& ps, const str_view& sv, size16_t term_idx, size16_t new_cursor_value) const
     {
         if (ps.options.verbose)
             ps.error_stream << "Shift to " << new_cursor_value << ", term: " << sv << "\n";
@@ -1548,7 +1637,7 @@ struct parser
     }
 
     template<typename ParserState>
-    constexpr void reduce(ParserState& ps, size_t rule_info_idx) const
+    constexpr void reduce(ParserState& ps, size16_t rule_info_idx) const
     {
         const auto& ri = rule_infos[rule_info_idx];
         if (ps.options.verbose)
@@ -1559,7 +1648,7 @@ struct parser
         }
 
         ps.cursor_stack.erase(ps.cursor_stack.end() - ri.r_elements, ps.cursor_stack.end());
-        size_t new_cursor_value = parse_table[ps.cursor_stack.back()][ri.l_idx].shift;
+        size16_t new_cursor_value = parse_table[ps.cursor_stack.back()][ri.l_idx].shift;
         
         if (ps.options.verbose)
         {
@@ -1574,7 +1663,7 @@ struct parser
     }
 
     template<typename ParserState>
-    constexpr void rr_conflict(ParserState& ps, size_t rule_idx) const
+    constexpr void rr_conflict(ParserState& ps, size16_t rule_idx) const
     {
         if (ps.options.verbose)
         {
@@ -1585,7 +1674,7 @@ struct parser
 
 
     template<typename ParserState>
-    constexpr void syntax_error(ParserState& ps, size_t term_idx) const
+    constexpr void syntax_error(ParserState& ps, size16_t term_idx) const
     {
         cstream<100> str;
         str << "Unexpected '" << term_names[term_idx] << "'";
@@ -1605,8 +1694,8 @@ struct parser
     template<typename It, typename ErrorStream>
     constexpr auto get_next_term_trivial(const It& start, const It& end, ErrorStream& error_stream) const
     {
-        size_t term_idx = uninitialized;
-        size_t term_size = uninitialized;
+        size16_t term_idx = uninitialized16;
+        size16_t term_size = uninitialized16;
         It it = start;
         if (it == end)
         {
@@ -1616,7 +1705,7 @@ struct parser
         else
         {
             char c = *it;
-            term_idx = trivial_term_table[char_to_idx(c)];
+            term_idx = trivial_term_table[char_to_idx(c)][0];
             term_size = 1;
         }
 
@@ -1639,7 +1728,7 @@ struct parser
     }
 
     template<typename ParserState>
-    constexpr void recognized_term(ParserState& ps, size_t term_idx) const
+    constexpr void recognized_term(ParserState& ps, size16_t term_idx) const
     {
         if (ps.options.verbose)
             ps.error_stream << "Recognized " << term_names[term_idx] << " \n";
@@ -1691,14 +1780,14 @@ struct parser
         typename Buffer::iterator it = buffer.begin();
 
         ps.cursor_stack.push_back(0);
-        size_t term_idx = uninitialized;
-        size_t term_size = uninitialized;
+        size16_t term_idx = uninitialized16;
+        size16_t term_size = uninitialized16;
         bool next_term_needed = true;
         std::optional<root_value_type> root_value;
 
         while (true)
         {
-            size_t cursor = ps.cursor_stack.back();
+            size16_t cursor = ps.cursor_stack.back();
             if (next_term_needed)
             {
                 auto res = get_next_term(it, buffer.end(), error_stream);
@@ -1707,7 +1796,7 @@ struct parser
                 next_term_needed = false;
             }
 
-            if (term_idx == uninitialized)
+            if (term_idx == uninitialized16)
             {
                 unexpected_char(ps, *it);
                 break;
@@ -1749,20 +1838,23 @@ struct parser
     rule_info rule_infos[rule_count] = { };
     slice nterm_rule_slices[nterm_count] = { };
     term_subset situation_first_after[situation_address_space_size] = { };
+    state situation_first_after_analyzed = {};
+    term_subset right_side_slice_first[max_rule_element_count * rule_count] = {};
+    right_side_slice_subset right_side_slice_first_analyzed = {};
     nterm_subset nterm_empty = { };
     term_subset nterm_first[nterm_count] = { };
     nterm_subset nterm_empty_analyzed = { };
     nterm_subset nterm_first_analyzed = { };
     state states[max_states] = { };
     parse_table_entry parse_table[max_states][term_count + nterm_count] = {};
-    size_t state_count = 0;
+    size16_t state_count = 0;
     situation_queue_entry situation_queue[max_states * rule_count + max_states] = { };
-    size_t situation_queue_size = 0;
+    size32_t situation_queue_size = 0;
     int term_precedences[term_count] = { };
     associativity term_associativities[term_count] = { associativity::ltor };
     int rule_precedences[rule_count] = { };
-    size_t rule_last_terms[rule_count] = { };
-    size_t trivial_term_table[distinct_values_count<char>] = { };
+    size16_t rule_last_terms[rule_count] = { };
+    conflicted_terms trivial_term_table[distinct_values_count<char>] = { };
     bool trivial_lexical_analyzer = true;
     functor_tuple_type functors;
     using value_reductor = value_variant_type(*)(const functor_tuple_type&, value_variant_type*, context_type&);
@@ -1921,7 +2013,7 @@ constexpr bool create_lexer_impl(DFA& sm, cstream<SSize>& error_stream, std::ind
     auto parse_f = [&p, &sm, &error_stream](const auto& r, size_t idx)
     { 
         bool valid = true;
-        slice prev{0, sm.size()};
+        slice prev{0, size32_t(sm.size())};
         std::optional<slice> res;
         {
             cstream<SSize> stream;
