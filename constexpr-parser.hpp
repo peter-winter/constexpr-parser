@@ -819,10 +819,11 @@ struct dfa
     constexpr slice add_multiplication(slice s)
     {
         size_t b = s.start;
+        states[b].end_state = true;
         for (size_t i = s.start; i < s.start + s.n; ++i)
         {
             if (states[i].end_state)
-                merge(b, i);
+                merge(i, b);
         }
         return s;
     }
@@ -848,18 +849,21 @@ struct dfa
     {
         size_t b1 = s1.start;
         size_t b2 = s2.start;
-        merge(b1, b2);
+        merge(b1, b2, true);
         return slice{ s1.start, s1.n + s2.n };
     }
 
-    constexpr void merge(size_t to, size_t from)
+    constexpr void merge(size_t to, size_t from, bool alt_end_state = false)
     {
         if (to == from)
             return;
         dfa_state& s_from = states[from];
         dfa_state& s_to = states[to];
         s_from.start_state = false;
-        s_to.end_state = s_from.end_state;
+        if (alt_end_state)
+            s_to.end_state = s_to.end_state || s_from.end_state;
+        else
+            s_to.end_state = s_from.end_state;
 
         for (size_t i = 0; i < dfa_state::transitions_size; ++i)
         {
@@ -870,7 +874,7 @@ struct dfa
             if (tr_to == uninitialized16)
                 tr_to = tr_from;
             else
-                merge(tr_to, tr_from);
+                merge(tr_to, tr_from, alt_end_state);
         }
 
         auto& cr = s_from.conflicted_recognition;
@@ -901,25 +905,43 @@ struct dfa
 
     constexpr size_t size() const { return states.size(); }
 
-    template<typename Stream>
-    constexpr void write_state_diag_str(const dfa_state& st, Stream& s) const
+    template<typename Stream, size_t N>
+    constexpr void write_state_diag_str(const dfa_state& st, Stream& s, size16_t idx, const name_table<N>& term_names) const
     {
+        s << "STATE " << idx;
+        if (st.end_state)
+            s << " * ";
+        size16_t term_idx = st.conflicted_recognition[0];
+        if (term_idx != uninitialized16)
+            s << term_names[term_idx];
+        s << "\n";
+
+        auto f = [&s](char c)
+        {
+            unsigned int x = (c & 0xff);
+            char d[] = {'0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'A', 'B', 'C', 'D', 'E', 'F'};
+            if (c > 32 && c < 127)
+                s << c;
+            else
+                s << "\\x" << d[x / 16] << d[x % 16];
+        };
+
         for (size_t i = 0; i < dfa_state::transitions_size; ++i)
         {
             if (st.transitions[i] == uninitialized16)
-                continue;
-            s << idx_to_char(i) << " -> " << st.transitions[i] << "   ";
+                continue;                
+            f(idx_to_char(i));
+            s << " -> " << st.transitions[i] << "   ";
         }
         s << "\n";
     }
 
-    template<typename Stream>
-    constexpr void write_diag_str(Stream& s) const
+    template<typename Stream, size_t N>
+    constexpr void write_diag_str(Stream& s, const name_table<N>& term_names) const
     {
         for (size_t i = 0; i < states.size(); ++i)
         {
-            s << "STATE " << i << "\n";
-            write_state_diag_str(states[i], s);
+            write_state_diag_str(states[i], s, i, term_names);
         }
     }
 
@@ -1278,7 +1300,7 @@ struct parser
     constexpr void add_term_subset(term_subset& dest, const term_subset& source)
     {
         for (size_t i = 0u; i < term_count; ++i)
-            dest.set(i, source.test(i));
+            dest.set(i, dest.test(i) || source.test(i));
     }
 
     constexpr const term_subset& make_right_side_slice_first(const rule_info& ri, size_t start)
@@ -1609,7 +1631,7 @@ struct parser
             if (trivial_lexical_analyzer)
                 s << "Trivial lookup" << "\n";
             else
-                lexer_sm.write_diag_str(s);
+                lexer_sm.write_diag_str(s, term_names);
         }
         else
             s << lexer_error_stream.str();
@@ -1960,7 +1982,7 @@ constexpr auto create_regex_parser(DFAType& sm)
 {
     using dfa_type = DFAType;
     
-    constexpr term regular_char(exclude("\\[]^-.*|()"), 0, associativity::ltor, "regular");
+    constexpr term regular_char(exclude("\\[]^-.*?|()"), 0, associativity::ltor, "regular");
     constexpr nterm<slice> expr("expr");
     constexpr nterm<slice> alt("alt");
     constexpr nterm<slice> concat("concat");

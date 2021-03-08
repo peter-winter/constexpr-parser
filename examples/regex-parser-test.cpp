@@ -13,7 +13,8 @@ struct rp
         opts.verbose = true;
         auto s = p.parse(opts, cstring_buffer(r), error_stream);
         valid = s.has_value();
-        sm.write_diag_str(sm_diag_stream);
+        name_table<2> tn{"t1", "t2"};
+        sm.write_diag_str(sm_diag_stream, tn);
     }
     
     DFA sm;
@@ -24,7 +25,7 @@ struct rp
     bool valid = true;
 };
 
-constexpr rp<dfa<100>> ob("[A-Z]");
+constexpr rp<dfa<100>> ob("a|b");
 
 int main()
 {
