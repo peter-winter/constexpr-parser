@@ -103,6 +103,7 @@ struct cvector<T, N, std::enable_if_t<is_cvector_compatible<T>::value>>
     constexpr const_iterator end() const { return const_iterator(the_data + current_size); }
     constexpr iterator begin() { return iterator(the_data); }
     constexpr iterator end() { return iterator(the_data + current_size); }
+    constexpr void clear() { current_size = 0; }
     constexpr iterator erase(iterator first, iterator last)
     {
         if (!(first < last))
@@ -745,6 +746,7 @@ struct dfa_state
 
     size8_t start_state = false;
     size8_t end_state = false;
+    size8_t unreachable = false;
     conflicted_terms conflicted_recognition = { uninitialized16, uninitialized16, uninitialized16, uninitialized16 };
     static const size_t transitions_size = distinct_values_count<char>;
     size16_t transitions[transitions_size] = {};
@@ -792,14 +794,14 @@ struct dfa
     {
         size_t old_size = states.size();
         states.push_back(dfa_state());
-        states.back().start_state = true;
+        states.back().start_state = 1;
         for (size_t i = 0; i < std::size(s); ++i)
             if (s.test(i))
             {
                 states.back().transitions[i] = size16_t(states.size());
             }
         states.push_back(dfa_state());
-        states.back().end_state = true;
+        states.back().end_state = 1;
         return slice{ size32_t(old_size), 2 };
     }
 
@@ -819,7 +821,7 @@ struct dfa
     constexpr slice add_multiplication(slice s)
     {
         size_t b = s.start;
-        states[b].end_state = true;
+        states[b].end_state = 1;
         for (size_t i = s.start; i < s.start + s.n; ++i)
         {
             if (states[i].end_state)
@@ -830,7 +832,7 @@ struct dfa
 
     constexpr slice add_optional(slice s)
     {
-        states[s.start].end_state = true;
+        states[s.start].end_state = 1;
         return s;
     }    
 
@@ -840,7 +842,7 @@ struct dfa
         for (size_t i = s1.start; i < s1.start + s1.n; ++i)
         {
             if (states[i].end_state)
-                merge(i, b);
+                merge(i, b, false, true);
         }
         return slice{ s1.start, s1.n + s2.n };
     }
@@ -849,17 +851,17 @@ struct dfa
     {
         size_t b1 = s1.start;
         size_t b2 = s2.start;
-        merge(b1, b2, true);
+        merge(b1, b2, true, true);
         return slice{ s1.start, s1.n + s2.n };
     }
 
-    constexpr void merge(size_t to, size_t from, bool alt_end_state = false)
+    constexpr void merge(size_t to, size_t from, bool alt_end_state = false, bool mark_from_as_unreachable = false)
     {
         if (to == from)
             return;
         dfa_state& s_from = states[from];
         dfa_state& s_to = states[to];
-        s_from.start_state = false;
+        s_from.start_state = 0;
         if (alt_end_state)
             s_to.end_state = s_to.end_state || s_from.end_state;
         else
@@ -874,7 +876,7 @@ struct dfa
             if (tr_to == uninitialized16)
                 tr_to = tr_from;
             else
-                merge(tr_to, tr_from, alt_end_state);
+                merge(tr_to, tr_from, alt_end_state, mark_from_as_unreachable);
         }
 
         auto& cr = s_from.conflicted_recognition;
@@ -886,6 +888,8 @@ struct dfa
             else
                 break;
         }
+
+        s_from.unreachable = mark_from_as_unreachable ? 1 : 0;
     }
 
     constexpr void mark_end_state(dfa_state& s, size_t idx)
@@ -909,6 +913,12 @@ struct dfa
     constexpr void write_state_diag_str(const dfa_state& st, Stream& s, size16_t idx, const name_table<N>& term_names) const
     {
         s << "STATE " << idx;
+        if (st.unreachable)
+        {
+            s << " (unreachable) \n";
+            return;
+        }
+
         if (st.end_state)
             s << " * ";
         size16_t term_idx = st.conflicted_recognition[0];
@@ -916,7 +926,7 @@ struct dfa
             s << term_names[term_idx];
         s << "\n";
 
-        auto f = [&s](char c)
+        auto f_char = [&s](char c)
         {
             unsigned int x = (c & 0xff);
             char d[] = {'0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'A', 'B', 'C', 'D', 'E', 'F'};
@@ -926,12 +936,44 @@ struct dfa
                 s << "\\x" << d[x / 16] << d[x % 16];
         };
 
-        for (size_t i = 0; i < dfa_state::transitions_size; ++i)
+        auto f_range = [&s, f_char](const auto& r, size16_t state_idx)
         {
-            if (st.transitions[i] == uninitialized16)
-                continue;                
-            f(idx_to_char(i));
-            s << " -> " << st.transitions[i] << "   ";
+            if (r.size() > 2)
+            {
+                s << "[";
+                f_char(r.front());
+                s << " - ";
+                f_char(r.back());
+                s << "] -> " << state_idx << "  ";
+            }
+            else
+            {
+                for (char c : r)
+                {
+                    f_char(c);
+                    s << " -> " << state_idx << "  ";
+                }
+            }
+        };
+
+        cvector<char, dfa_state::transitions_size> tmp;
+        size16_t prev = uninitialized16;
+        for (size_t i = 0; i < dfa_state::transitions_size + 1; ++i)
+        {       
+            size16_t to = (i == dfa_state::transitions_size ? uninitialized16 : st.transitions[i]);
+            if (to == prev && to != uninitialized16)
+                tmp.push_back(idx_to_char(i));
+            else 
+            {
+                if (prev != uninitialized)
+                {
+                    f_range(tmp, prev);
+                    tmp.clear();
+                }
+                if (to != uninitialized16)
+                    tmp.push_back(idx_to_char(i));
+            }
+            prev = to;
         }
         s << "\n";
     }

@@ -25,14 +25,15 @@ struct rp
     bool valid = true;
 };
 
-constexpr rp<dfa<100>> ob("a|b");
+constexpr rp<dfa<100>> ob(R"__("([^\\"]|\\.)*"-)__");
 
 int main()
 {
     //std::cout << ob.diag_stream.str();
     std::cout << "\nRegex verbose parse: \n\n";
     std::cout << ob.error_stream.str() << "\n";
-    std::cout << ob.sm_diag_stream.str();
+    if (ob.valid)
+        std::cout << ob.sm_diag_stream.str();
     return 0;
 }
 
