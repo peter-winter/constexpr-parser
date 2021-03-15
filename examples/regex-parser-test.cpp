@@ -25,7 +25,7 @@ struct rp
     bool valid = true;
 };
 
-constexpr rp<dfa<100>> ob(R"__("([^\\"]|\\.)*"-)__");
+constexpr rp<dfa<100>> ob("[1-9][0-9]*");
 
 int main()
 {

@@ -90,6 +90,7 @@ struct cvector<T, N, std::enable_if_t<is_cvector_compatible<T>::value>>
     constexpr const T* data() const { return the_data; }
     constexpr T* data() { return the_data; }
     constexpr size_type size() const { return current_size; }
+    constexpr bool empty() const { return current_size == 0; }
     constexpr void reserve(size_type) const {};
     constexpr const T& operator[](size_type idx) const { return the_data[idx]; }
     constexpr T& operator[](size_type idx) { return the_data[idx]; }
@@ -104,13 +105,34 @@ struct cvector<T, N, std::enable_if_t<is_cvector_compatible<T>::value>>
     constexpr iterator begin() { return iterator(the_data); }
     constexpr iterator end() { return iterator(the_data + current_size); }
     constexpr void clear() { current_size = 0; }
+    constexpr iterator erase(iterator pos)
+    {
+        if (pos < begin() || !(pos < end()))
+            return end();
+        iterator it = pos + 1;
+        while (!(it == end()))
+        {
+            *pos = std::move(*it);
+            ++pos; ++it;
+        }
+        current_size--;
+        return end();
+    }    
     constexpr iterator erase(iterator first, iterator last)
     {
         if (!(first < last))
             return end();
         auto from = first < begin() ? begin() : first;
         auto to = last > end() ? end() : last;
-        current_size -= (to - from);
+        size_type diff = to - from;
+        iterator it = to;
+        while (!(it == end()))
+        {
+            *from = std::move(*it);
+            ++from; ++it;
+        }
+        current_size -= diff;
+
         return end();
     }    
 
@@ -263,19 +285,22 @@ struct cstring_buffer
     {
         const char* ptr;
 
-        constexpr char operator *() { return *ptr; }
+        constexpr char operator *() const { return *ptr; }
         constexpr iterator& operator ++() { ++ptr; return *this; }
         constexpr iterator operator ++(int) { iterator i(*this); ++ptr; return i; }
-        constexpr bool operator == (const iterator& other) { return ptr == other.ptr; }
-        constexpr iterator& operator += (size_t size) { ptr += size; return *this; }
+        constexpr bool operator == (const iterator& other) const { return ptr == other.ptr; }
+        constexpr iterator operator + (size_t size) const { return iterator{ptr + size}; }
     };
 
     constexpr iterator begin() const { return iterator{ data }; }
     constexpr iterator end() const { return iterator{ data + N - 1 }; }
-    constexpr str_view view(const iterator& it, size_t size) const { return str_view(it.ptr, size); }
+    constexpr str_view view(const iterator& start, const iterator& end) const { return str_view(start.ptr, end.ptr - start.ptr); }
 
     char data[N] = { 0 };
 };
+
+template<size_t N>
+cstring_buffer(const char(&)[N])->cstring_buffer<N>;
 
 struct string_buffer
 {
@@ -297,8 +322,8 @@ struct string_buffer
     std::string str;
 };
 
-template<size_t N>
-cstring_buffer(const char(&)[N])->cstring_buffer<N>;
+template<typename Buffer>
+using iterator_t = typename Buffer::iterator;
 
 struct skip
 {
@@ -390,6 +415,28 @@ struct parser_value_stack_type<cstring_buffer<N>, EmptyRulesCount, ValueVariantT
 
 template<typename Buffer, size_t EmptyRulesCount, typename ValueVariantType>
 using parser_value_stack_type_t = typename parser_value_stack_type<Buffer, EmptyRulesCount, ValueVariantType>::type;
+
+template<typename Iterator>
+struct recognized_term
+{
+    Iterator it;
+    size16_t term_idx;
+};
+
+template<typename Buffer>
+struct recognized_terms_buffer
+{
+    using type = std::vector<recognized_term<iterator_t<Buffer>>>;
+};
+
+template<size_t N>
+struct recognized_terms_buffer<cstring_buffer<N>>
+{
+    using type = cvector<recognized_term<iterator_t<cstring_buffer<N>>>, N>;
+};
+
+template<typename Buffer>
+using recognized_terms_buffer_t = typename recognized_terms_buffer<Buffer>::type;
 
 template<size_t MaxSize>
 struct cstream
@@ -619,18 +666,26 @@ struct term
 {
     using value_type = term_value_type;
 
+    constexpr term(char c, int precedence = 0, associativity a = associativity::ltor) :
+        name(c),
+        precedence(precedence), ass(a),  
+        method(term_method::exact)
+    {
+        data[0] = c;
+    }
+
     template<size_t N1>
-    constexpr term(const char (&source)[N1], int precedence = 0, associativity a = associativity::ltor, const char* name = nullptr) :
-        precedence(precedence), ass(a), name(name ? name : source), 
-        method(N == 2 && source[1] == 0 ? term_method::exact : term_method::regex)
+    constexpr term(const char (&source)[N1], const char* name = nullptr, int precedence = 0, associativity a = associativity::ltor) :
+        name(name ? name : source), precedence(precedence), ass(a),  
+        method(term_method::regex)
     {
         copy_array(data, source, std::make_index_sequence<N1>{});
         check();
     }
 
     template<size_t N1>
-    constexpr term(exclude<N1> ex, int precedence = 0, associativity a = associativity::ltor, const char* name = nullptr) :
-        precedence(precedence), ass(a), name(name ? name : ex.data), 
+    constexpr term(exclude<N1> ex, const char* name = nullptr, int precedence = 0, associativity a = associativity::ltor) :
+        name(name ? name : ex.data), precedence(precedence), ass(a), 
         method(term_method::exclude)
     {
         copy_array(data, ex.data, std::make_index_sequence<N1>{});
@@ -638,8 +693,8 @@ struct term
     }
 
     template<size_t N1>
-    constexpr term(include<N1> in, int precedence = 0, associativity a = associativity::ltor, const char* name = nullptr) :
-        precedence(precedence), ass(a), name(name ? name : in.data), 
+    constexpr term(include<N1> in, const char* name = nullptr, int precedence = 0, associativity a = associativity::ltor) :
+        name(name ? name : in.data), precedence(precedence), ass(a), 
         method(term_method::include)
     {
         copy_array(data, in.data, std::make_index_sequence<N1>{});
@@ -650,11 +705,11 @@ struct term
     {
         if (data[0] == 0)
             throw std::runtime_error("empty string not allowed");
-        if (name[0] == 0)
-            throw std::runtime_error("empty name not allowed");
+        if (get_name() == nullptr)
+            throw std::runtime_error("nullptr name not allowed");
     }
     
-    constexpr const char* get_name() const { return name; }
+    constexpr const char* get_name() const { return method == term_method::exact ? name.single_char : name.str; }
 
     constexpr bool is_trivial() const 
     { 
@@ -664,18 +719,33 @@ struct term
     char data[N] = {};
     int precedence;
     associativity ass;
-    const char* name;
+    union _name
+    {
+        constexpr _name(const char* str): 
+            str(str)
+        {}
+
+        constexpr _name(char c): 
+            single_char{c, 0}
+        {}
+
+        const char* str = nullptr;
+        char single_char[2];
+    } name;
+    
     term_method method;
 };
 
-template<size_t N>
-term(const char (&)[N], int = 0, associativity = associativity::ltor, const char* = nullptr) -> term<N>;
+term(char c, int = 0, associativity = associativity::ltor) -> term<1>;
 
 template<size_t N>
-term(exclude<N>, int = 0, associativity = associativity::ltor, const char* = nullptr) -> term<N>;
+term(const char (&)[N], const char* = nullptr, int = 0, associativity = associativity::ltor) -> term<N>;
 
 template<size_t N>
-term(include<N>, int = 0, associativity = associativity::ltor, const char* = nullptr) -> term<N>;
+term(exclude<N>, const char* = nullptr, int = 0, associativity = associativity::ltor) -> term<N>;
+
+template<size_t N>
+term(include<N>, const char* = nullptr, int = 0, associativity = associativity::ltor) -> term<N>;
 
 struct eof
 {
@@ -695,6 +765,12 @@ template<size_t N>
 struct symbol_type<char [N]>
 {
     using type = term<N>;
+};
+
+template<>
+struct symbol_type<char>
+{
+    using type = term<1>;
 };
 
 template<typename T>
@@ -987,6 +1063,29 @@ struct dfa
         }
     }
 
+    template<typename Iterator, typename RecognizedTermsBuffer>
+    constexpr void recognize(const Iterator& start, const Iterator& end, RecognizedTermsBuffer& recognized_terms_buffer) const
+    {
+        size16_t state_idx = 0;
+        Iterator it = start;
+        while (true)
+        {
+            const dfa_state& state = states[state_idx];
+            size16_t rec_idx = state.conflicted_recognition[0];
+            if (rec_idx != uninitialized16)
+                recognized_terms_buffer.emplace_back(recognized_term<Iterator>{it, rec_idx});
+            
+            if (it == end)
+                break;
+            
+            size16_t tr = state.transitions[*it];
+            if (tr == uninitialized16)
+                break;
+            state_idx = tr;
+            ++it;
+        }
+    }
+
     dfa_state_container_type states = {};
 };
 
@@ -1024,9 +1123,9 @@ struct parser
     static const size_t max_states = MaxStates;
     static const size_t max_rule_element_count = MaxRuleElementCount;
     static const size_t term_count = TermCount + 1;
-    static const size_t eof_idx = TermCount;
+    static const size16_t eof_idx = TermCount;
     static const size_t nterm_count = NTermCount + 1;
-    static const size_t fake_root_idx = NTermCount;
+    static const size16_t fake_root_idx = NTermCount;
     static const size_t rule_count = RuleCount + 1;
     static const size_t empty_rules_count = EmptyRulesCount;
     static const size_t situation_size = max_rule_element_count + 1;
@@ -1098,28 +1197,33 @@ struct parser
 
     static const size_t value_stack_initial_capacity = 1 << 10;
     static const size_t cursor_stack_initial_capacity = 1 << 10;
+    static const size_t recognized_terms_initial_capacity = 100;
 
-    template<typename CursorStack, typename ValueStack, typename ErrorStream>
+    template<typename CursorStack, typename ValueStack, typename RecognizedTermsBuffer, typename ErrorStream>
     struct parser_state
     {
         constexpr parser_state(
             CursorStack& cursor_stack,
             ValueStack& value_stack,
+            RecognizedTermsBuffer& recognized_terms,
             ErrorStream& error_stream,
             context_type& context,
             parse_options options) :
             cursor_stack(cursor_stack),
             value_stack(value_stack),
+            recognized_terms(recognized_terms),
             error_stream(error_stream),
             context(context),
             options(options)
         {
             cursor_stack.reserve(cursor_stack_initial_capacity);
             value_stack.reserve(value_stack_initial_capacity);
+            recognized_terms.reserve(recognized_terms_initial_capacity);
         }
 
         CursorStack& cursor_stack;
         ValueStack& value_stack;
+        RecognizedTermsBuffer& recognized_terms;
         ErrorStream& error_stream;
         context_type& context;
         parse_options options;
@@ -1162,7 +1266,7 @@ struct parser
         analyze_states();
         
         if (!trivial_lexical_analyzer)
-            create_lexer_impl(lexer_sm, lexer_error_stream, seq_for_terms, terms);
+            valid_lexer = create_lexer_impl(lexer_sm, lexer_error_stream, seq_for_terms, terms);
     }
 
     template<typename... Rules, size_t... I>
@@ -1206,13 +1310,9 @@ struct parser
     template<size_t N>
     constexpr void analyze_term(term<N> t, size16_t idx)
     {
-        const char* name = t.name;
-        int precedence = t.precedence;
-        associativity ass = t.ass;
-
-        term_names[idx] = name;
-        term_precedences[idx] = precedence;
-        term_associativities[idx] = ass;
+        term_names[idx] = t.get_name();
+        term_precedences[idx] = t.precedence;
+        term_associativities[idx] = t.ass;
 
         if (trivial_lexical_analyzer && t.is_trivial())
             analyze_trivial_term(t, idx);
@@ -1223,7 +1323,7 @@ struct parser
     template<typename ValueType>
     constexpr void analyze_nterm(nterm<ValueType> nt, size16_t idx)
     {
-        nterm_names[idx] = nt.name;
+        nterm_names[idx] = nt.get_name();
     }
 
     template<typename ValueType>
@@ -1235,7 +1335,7 @@ struct parser
     template<size_t N>
     constexpr auto make_symbol(term<N> t) const
     {
-        return symbol{ true, size16_t(find_name(term_names, t.name)) };
+        return symbol{ true, size16_t(find_name(term_names, t.get_name())) };
     }
 
     template<typename ValueType>
@@ -1759,35 +1859,38 @@ struct parser
         }
         return std::get<root_value_type>(ps.value_stack.front());
     }
-
-    template<typename It, typename ErrorStream>
-    constexpr auto get_next_term_trivial(const It& start, const It& end, ErrorStream& error_stream) const
+    
+    template<typename Iterator>
+    constexpr auto get_next_term_trivial(const Iterator& start, const Iterator& end) const
     {
-        size16_t term_idx = uninitialized16;
-        size16_t term_size = uninitialized16;
-        It it = start;
-        if (it == end)
-        {
-            term_idx = eof_idx;
-            term_size = 0;
-        }
-        else
-        {
-            char c = *it;
-            term_idx = trivial_term_table[char_to_idx(c)][0];
-            term_size = 1;
-        }
-
-        return std::make_pair(term_idx, term_size);
+        return recognized_term<Iterator>{ start + 1, trivial_term_table[char_to_idx(*start)][0] };
     }
 
-    template<typename It, typename ErrorStream>
-    constexpr auto get_next_term(const It& start, const It& end, ErrorStream& error_stream) const
+    template<typename ParserState, typename Iterator>
+    constexpr auto get_next_term_dfa(ParserState& ps, const Iterator& start, const Iterator& end) const
     {
+        if (ps.recognized_terms.empty())
+            lexer_sm.recognize(start, end, ps.recognized_terms);
+        if (ps.recognized_terms.empty())
+            return recognized_term<Iterator>{ start, uninitialized16 };
+
+        auto ret = ps.recognized_terms.front();
+        ps.recognized_terms.erase(ps.recognized_terms.begin());
+        return ret;
+    }
+
+    template<typename ParserState, typename Iterator>
+    constexpr auto get_next_term(ParserState& ps, const Iterator& start, const Iterator& end) const
+    {
+        if (start == end)
+        {
+            return recognized_term<Iterator>{ end, eof_idx };
+        }
+
         if (trivial_lexical_analyzer)
-            return get_next_term_trivial(start, end, error_stream);
+            return get_next_term_trivial(start, end);
         else
-            throw std::runtime_error("not implemented yet");
+            return get_next_term_dfa(ps, start, end);
     }
 
     template<typename ParserState>
@@ -1797,7 +1900,7 @@ struct parser
     }
 
     template<typename ParserState>
-    constexpr void recognized_term(ParserState& ps, size16_t term_idx) const
+    constexpr void trace_recognized_term(ParserState& ps, size16_t term_idx) const
     {
         if (ps.options.verbose)
             ps.error_stream << "Recognized " << term_names[term_idx] << " \n";
@@ -1843,44 +1946,43 @@ struct parser
     {
         parser_value_stack_type_t<Buffer, empty_rules_count, value_variant_type> value_stack{};
         parse_table_cursor_stack_type_t<Buffer, empty_rules_count> cursor_stack{};
-        parser_state ps(cursor_stack, value_stack, error_stream, context, options);
+        recognized_terms_buffer_t<Buffer> recognized_terms;
+        parser_state ps(cursor_stack, value_stack, recognized_terms, error_stream, context, options);
 
         bool error = false;
-        typename Buffer::iterator it = buffer.begin();
-
-        ps.cursor_stack.push_back(0);
+        iterator_t<Buffer> it = buffer.begin();
+        iterator_t<Buffer> term_end = it;
         size16_t term_idx = uninitialized16;
-        size16_t term_size = uninitialized16;
-        bool next_term_needed = true;
+        
+        ps.cursor_stack.push_back(0);
+        
         std::optional<root_value_type> root_value;
 
         while (true)
         {
             size16_t cursor = ps.cursor_stack.back();
-            if (next_term_needed)
+            if (it == term_end)
             {
-                auto res = get_next_term(it, buffer.end(), error_stream);
-                term_idx = res.first;
-                term_size = res.second;
-                next_term_needed = false;
-            }
-
-            if (term_idx == uninitialized16)
-            {
-                unexpected_char(ps, *it);
-                break;
-            }
-            else
-            {
-                recognized_term(ps, term_idx);
+                auto res = get_next_term(ps, it, buffer.end());
+                term_end = res.it;
+                term_idx = res.term_idx;
+                
+                if (term_idx == uninitialized16)
+                {
+                    unexpected_char(ps, *it);
+                    break;
+                }
+                else
+                {
+                    trace_recognized_term(ps, term_idx);
+                }
             }
             
             const auto& entry = parse_table[cursor][get_parse_table_idx(true, term_idx)];
             if (entry.kind == parse_table_entry_kind::shift)
             {
-                shift(ps, buffer.view(it, term_size), term_idx, entry.shift);
-                it += term_size;
-                next_term_needed = true;
+                shift(ps, buffer.view(it, term_end), term_idx, entry.shift);
+                it = term_end;
             }
             else if (entry.kind == parse_table_entry_kind::reduce)
                 reduce(ps, entry.reduce);
@@ -2024,7 +2126,7 @@ constexpr auto create_regex_parser(DFAType& sm)
 {
     using dfa_type = DFAType;
     
-    constexpr term regular_char(exclude("\\[]^-.*?|()"), 0, associativity::ltor, "regular");
+    constexpr term regular_char(exclude("\\[]^-.*?|()"), "regular", 0, associativity::ltor);
     constexpr nterm<slice> expr("expr");
     constexpr nterm<slice> alt("alt");
     constexpr nterm<slice> concat("concat");
@@ -2037,36 +2139,36 @@ constexpr auto create_regex_parser(DFAType& sm)
 
     return parser(
         expr,
-        terms(regular_char, "\\", "[", "]", "^", "-", ".", "*", "?", "|", "(", ")"),
+        terms(regular_char, '\\', '[', ']', '^', '-', '.', '*', '?', '|', '(', ')'),
         nterms(expr, alt, concat, q_expr, primary, c_range, c_subset, c_subset_item, single_char),
         rules(
             single_char(regular_char) >= [](str_view s) { return s[0]; },
-            single_char("\\", "\\") >= [](skip, str_view s) { return s[0]; },
-            single_char("\\", "[") >= [](skip, str_view s) { return s[0]; },
-            single_char("\\", "]") >= [](skip, str_view s) { return s[0]; },
-            single_char("\\", "^") >= [](skip, str_view s) { return s[0]; },
-            single_char("\\", "-") >= [](skip, str_view s) { return s[0]; },
-            single_char("\\", ".") >= [](skip, str_view s) { return s[0]; },
-            single_char("\\", "|") >= [](skip, str_view s) { return s[0]; },
-            single_char("\\", "(") >= [](skip, str_view s) { return s[0]; },
-            single_char("\\", ")") >= [](skip, str_view s) { return s[0]; },
-            c_range(single_char, "-", single_char) >= [](char c1, skip, char c2){ return char_range{c1, c2}; },
+            single_char('\\', '\\') >= [](skip, str_view s) { return s[0]; },
+            single_char('\\', '[') >= [](skip, str_view s) { return s[0]; },
+            single_char('\\', ']') >= [](skip, str_view s) { return s[0]; },
+            single_char('\\', '^') >= [](skip, str_view s) { return s[0]; },
+            single_char('\\', '-') >= [](skip, str_view s) { return s[0]; },
+            single_char('\\', '.') >= [](skip, str_view s) { return s[0]; },
+            single_char('\\', '|') >= [](skip, str_view s) { return s[0]; },
+            single_char('\\', '(') >= [](skip, str_view s) { return s[0]; },
+            single_char('\\', ')') >= [](skip, str_view s) { return s[0]; },
+            c_range(single_char, '-', single_char) >= [](char c1, skip, char c2){ return char_range{c1, c2}; },
             c_subset_item(single_char) >= [](char c) { return char_range{ c, c}; },
             c_subset_item(c_range) >= [](char_range r){ return r; },
             c_subset(c_subset_item) >= [](char_range r){ return dfa_type::char_subset_from_item(r); },
             c_subset(c_subset_item, c_subset) >= [](char_range r, char_subset&& s){ return dfa_type::add_item_to_char_subset(std::move(s), r); },
             primary(single_char) >= [&sm](char c) { return sm.add_primary_single_char(c); },
-            primary(".") >= [&sm](skip) { return sm.add_primary_any_char(); },
-            primary("[", c_subset, "]") >= [&sm](skip, char_subset&& s, skip) { return sm.add_primary_char_subset(s); },
-            primary("[", "^", c_subset, "]") >= [&sm](skip, skip, char_subset&& s, skip) { return sm.add_primary_char_subset_exclusive(s); },
+            primary('.') >= [&sm](skip) { return sm.add_primary_any_char(); },
+            primary('[', c_subset, ']') >= [&sm](skip, char_subset&& s, skip) { return sm.add_primary_char_subset(s); },
+            primary('[', '^', c_subset, ']') >= [&sm](skip, skip, char_subset&& s, skip) { return sm.add_primary_char_subset_exclusive(s); },
             primary("(", expr, ")") >= [](skip, slice p, skip) { return p; },
             q_expr(primary) >= [](slice p) { return p; },
-            q_expr(primary, "*") >= [&sm](slice p, skip) { return sm.add_multiplication(p); },
-            q_expr(primary, "?") >= [&sm](slice p, skip) { return sm.add_optional(p); },
+            q_expr(primary, '*') >= [&sm](slice p, skip) { return sm.add_multiplication(p); },
+            q_expr(primary, '?') >= [&sm](slice p, skip) { return sm.add_optional(p); },
             concat(q_expr) >= [](slice p) { return p; },
             concat(q_expr, concat) >= [&sm](slice p1, slice p2) { return sm.add_concat(p1, p2); },
             alt(concat) >= [](slice p) { return p; },
-            alt(alt, "|", alt) >= [&sm](slice p1, skip, slice p2) { return sm.add_alt(p1, p2); },
+            alt(alt, '|', alt) >= [&sm](slice p1, skip, slice p2) { return sm.add_alt(p1, p2); },
             expr(alt) >= [](slice p) { return p; }
         ),
         no_context{},
@@ -2080,30 +2182,37 @@ constexpr bool create_lexer_impl(DFA& sm, cstream<SSize>& error_stream, std::ind
     using buffer_type = cstring_buffer<max_v<N...>>;
     
     auto p = create_regex_parser(sm);
-    auto parse_f = [&p, &sm, &error_stream](const auto& r, size_t idx)
+    auto single_f = [&p, &sm, &error_stream](const auto& t, size_t idx)
     { 
-        bool valid = true;
         slice prev{0, size32_t(sm.size())};
-        std::optional<slice> res;
-        {
-            cstream<SSize> stream;
-            res = p.parse(buffer_type(r), stream);
-            error_stream << "Regex " << r << " parse error: \n" << stream.str() << "\n";
-        }
 
-        if (res.has_value())
+        if (t.is_trivial())
         {
-            sm.mark_end_states(res.value(), idx);
-            sm.add_alt(prev, res.value());
+            slice new_sl = sm.add_primary_single_char(t.data[0]);
+            sm.mark_end_states(new_sl, idx);
+            sm.add_alt(prev, new_sl);
+            return true;
         }
         else
-        {   
-            valid = false;
+        {
+            cstream<SSize> stream;
+            std::optional<slice> res = p.parse(buffer_type(t.data), stream);
+                
+            if (res.has_value())
+            {
+                sm.mark_end_states(res.value(), idx);
+                sm.add_alt(prev, res.value());
+                return true;
+            }
+            else
+            {   
+                error_stream << "Regex " << t.data << " parse error: \n" << stream.str();
+                return false;
+            }
         }
-        return valid;
     };
 
-    return (true && ... && parse_f(std::get<I>(ts).data, I));
+    return (true && ... && single_f(std::get<I>(ts), I));
 }
 
 template<typename DFA, size_t SSize, size_t... N>
