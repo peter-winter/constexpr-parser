@@ -1592,10 +1592,10 @@ struct parser<
         if (r_p > t_p)
             return parse_table_entry_kind::reduce;
 
-        if (r_p == t_p && term_associativities[term_idx] == associativity::ltor)
+        if (r_p == t_p)
         {
             size16_t last_term_idx = rule_last_terms[rule_idx];
-            if (last_term_idx == term_idx)
+            if (term_associativities[last_term_idx] == associativity::ltor)
                 return parse_table_entry_kind::reduce;
         }
         return parse_table_entry_kind::shift;
@@ -1907,7 +1907,8 @@ struct parser<
     constexpr std::optional<root_value_type> parse(const Buffer& buffer) const
     {
         no_context c;
-        return parse_in_context(parse_options{}, buffer, c, no_stream{});
+        no_stream error_stream;
+        return parse_in_context(parse_options{}, buffer, c, error_stream);
     }
 
     template<typename Buffer, typename ErrorStream, typename = std::enable_if_t<std::is_same_v<context_type, no_context>>>
