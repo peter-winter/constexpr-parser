@@ -1,6 +1,6 @@
 #include <iostream>
 #include "../constexpr-parser.hpp"
-/*
+
 template<typename DFA>
 struct rp
 {
@@ -8,9 +8,9 @@ struct rp
     constexpr rp(const char(&r)[N])
     {
         auto p = create_regex_parser(sm);
-        p.write_diag_str(diag_stream);
+        //p.write_diag_str(diag_stream);
         parse_options opts;
-        opts.verbose = true;
+        //opts.verbose = true;
         auto s = p.parse(opts, cstring_buffer(r), error_stream);
         valid = s.has_value();
         str_table<2> tn{"t1", "t2"};
@@ -35,25 +35,28 @@ int main()
     std::cout << ob.sm_diag_stream.str();
     return 0;
 }
-
-*/
-
+/*
 constexpr nterm<int> expr("expr");
 
 constexpr term o_plus('+', 1);
+
 
 constexpr parser p(
     expr,
     terms(o_plus),
     nterms(expr),
     rules(
-        expr('+', '+') >= [](skip, skip){return 1;}
+        expr('+') >= [](skip){return 1;}
     ),
     no_context{},
     deduce_max_states{}
 );
 
+diag_msg msg(p, use_const_message<200000>{});
+constexpr const char* str = msg.get_stream().str();
+
 int main()
 {
+    std::cout << str;
     return 0;
-}
+}*/
