@@ -1,37 +1,49 @@
 #include <iostream>
+#include <sstream>
+
 #include "../constexpr-parser.hpp"
 
-template<typename DFA>
-struct rp
+template<size_t N>
+struct regex
 {
-    template<size_t N>
-    constexpr rp(const char(&r)[N])
+    constexpr regex(const char(&str)[N])
     {
         auto p = create_regex_parser(sm);
-        p.write_diag_str(diag_stream);
-        parse_options opts;
-        opts.verbose = true;
-        auto s = p.parse(opts, cstring_buffer(r), error_stream);
-        valid = s.has_value();
-        str_table<2> tn{"t1", "t2"};
-        sm.write_diag_str(sm_diag_stream, tn);
+        auto s = p.parse(cstring_buffer(str));
+        if (!s.has_value())
+            throw std::runtime_error("invalid regex");
+        sm.mark_end_states(s.value(), 0);
+    }
+
+    struct simple_state
+    {
+        struct 
+        {
+            bool verbose = false;
+        } options;
+        no_stream error_stream;
+    };
+
+    template<size_t N1>
+    constexpr bool match(const char(&str)[N1]) const
+    {
+        simple_state ss;
+        cstring_buffer buf(str);
+        auto res = sm.recognize(buf.begin(), buf.end(), ss);
+        return res.term_idx == 0 && res.it == buf.end();
     }
     
-    DFA sm;
-    
-    cstream<200000> diag_stream;
-    cstream<20000> error_stream;
-    cstream<200000> sm_diag_stream;
-    bool valid = true;
+    dfa<N * 2> sm;
 };
 
-constexpr rp<dfa<100>> ob("[1-9][0-9]*");
+template<size_t N>
+regex(const char (&)[N]) -> regex<N>;
+
+constexpr regex r("[1-9][0-9]*");
+constexpr bool m = r.match("123");
 
 int main()
 {
-    //std::cout << ob.diag_stream.str();
-    std::cout << "\nRegex verbose parse: \n\n";
-    std::cout << ob.error_stream.str() << "\n";
-    std::cout << ob.sm_diag_stream.str();
+    std::cout << m << std::endl;
     return 0;
 }

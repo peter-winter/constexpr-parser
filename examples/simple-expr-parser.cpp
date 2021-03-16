@@ -40,7 +40,7 @@ constexpr term o_plus('+', 1);
 constexpr term o_minus('-', 1);
 constexpr term o_mul('*', 2);
 constexpr term o_div('/', 2);
-constexpr term number("[1-9][0-9]*", "number", 0, associativity::ltor);
+constexpr term number("[1-9][0-9]*", "number");
 
 constexpr parser p(
     expr,
@@ -54,33 +54,19 @@ constexpr parser p(
         expr('-', expr)[3] >= [](auto, int x) { return -x; },
         expr('(', expr, ')') >= [](auto, int x, auto) { return x; },
         expr(number) >= [](auto sv) { return get_int(sv); }
-    ),
-    no_context{},
-    deduce_max_states{}
+    )
 );
 
-constexpr diag_msg diag(p, use_const_message<40000>{});
+constexpr auto res_ok = p.parse(cstring_buffer("-120*2/10"));
+constexpr int v = res_ok.value();
 
-constexpr parse_options opts { true };
-
-constexpr parse_result res_ok(p, opts, cstring_buffer("-120*2/10"), use_const_message<10000>{});
-constexpr parse_result res_fail(p, opts, cstring_buffer("(()"), use_const_message<10000>{});
-
-constexpr auto v = res_ok.get_value();
-
-constexpr const char* error_ok = res_ok.get_error_stream().str();
-constexpr const char* error_fail = res_fail.get_error_stream().str();
+constexpr auto res_fail = p.parse(cstring_buffer("--"));
+constexpr bool b = res_fail.has_value();
 
 int main()
 {
-    std::cout << diag.get_stream().str() << std::endl;
-
-    std::cout << "Success case" << std::endl;
-    std::cout << error_ok << std::endl;
-    std::cout << "Value: " << v << std::endl << std::endl;
-    
-    std::cout << "Fail case" << std::endl;
-    std::cout << error_fail << std::endl;
+    std::cout << "Success case: " << v << std::endl;
+    std::cout << "Fail case: " << b << std::endl;
 
     return 0;
 }

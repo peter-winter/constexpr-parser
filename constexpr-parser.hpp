@@ -4,10 +4,10 @@
 #include <limits>
 #include <tuple>
 #include <algorithm>
-#include <sstream>
 #include <vector>
 #include <optional>
 #include <variant>
+#include <ostream>
 
 using size_t = std::uint64_t;
 using size8_t = std::uint8_t;
@@ -150,9 +150,18 @@ struct str_view
         return false;
     }
 
+    friend std::ostream& operator << (std::ostream& s, const str_view& sv);
+
     const char* str;
     size_t size;
 };
+
+std::ostream& operator << (std::ostream& s, const str_view& sv) 
+{
+    for (size_t i = 0; i < sv.size; ++i)
+        s << sv.str[i];
+    return s; 
+} 
 
 template<std::size_t N>
 struct cbitset
@@ -258,6 +267,12 @@ constexpr void copy_array(T *a1, const T* a2, std::index_sequence<I...>)
 {
     (void(a1[I] = a2[I]), ...);
 }
+
+struct no_stream
+{
+    template<typename T>
+    constexpr const no_stream& operator <<(T&&) const { return *this; }
+};
 
 template<size_t N>
 struct cstring_buffer
@@ -444,75 +459,6 @@ struct recognized_term
     size16_t term_idx;
 };
 
-template<size_t MaxSize>
-struct cstream
-{
-    constexpr cstream& operator << (const char* source)
-    {
-        const char* s = source;
-        while (*s)
-        {
-            data[current_size++] = *s++;
-        }
-
-        return *this;
-    }
-
-    constexpr cstream& operator << (str_view v)
-    {
-        for (size_t i = 0; i < v.size; ++i)
-        {
-            data[current_size++] = v.str[i];
-        }
-
-        return *this;
-    }
-
-    constexpr cstream& operator << (char c)
-    {
-        data[current_size++] = c;
-        return *this;
-    }
-
-    constexpr cstream& operator << (size16_t x)
-    {
-        return *this << size_t(x);
-    }
-
-    constexpr cstream& operator << (size_t x)
-    {
-        if (x == 0)
-        {
-            data[current_size++] = '0';
-            return *this;
-        }
-
-        char digits[std::numeric_limits<size_t>::digits10] = { 0 };
-        int digit_count = 0;
-        while (x)
-        {
-            digits[digit_count++] = x % 10;
-            x /= 10;
-        }
-        for (int i = digit_count - 1; i >= 0; --i)
-        {
-            data[current_size++] = '0' + digits[i];
-        }
-        return *this;
-    }
-
-    constexpr const char* str() const { return data; }
-
-    char data[MaxSize] = { 0 };
-    size_t current_size = 0;
-};
-
-struct no_stream
-{
-    template<typename T>
-    constexpr const no_stream& operator <<(T&&) const { return *this; }
-};
-
 template<size_t N>
 constexpr size_t find_str(const str_table<N>& table, const char* str)
 {
@@ -523,9 +469,8 @@ constexpr size_t find_str(const str_table<N>& table, const char* str)
             return res;
         res++;
     }
-    cstream<100> s;
-    s << "string not found: " << str;
-    throw std::runtime_error(s.str());
+    if (res == std::size(table))
+        throw std::runtime_error("string not found");
 }
 
 constexpr size_t find_char(char c, const char* str)
@@ -1056,7 +1001,7 @@ struct dfa
 
                 if (ps.options.verbose)
                 {
-                    ps.error_stream << "LEXER: Recognized " << rec_idx << "\n";
+                    ps.error_stream << "REGEX MATCH: Recognized " << rec_idx << "\n";
                 }
             }
             
@@ -1071,8 +1016,8 @@ struct dfa
 
             if (ps.options.verbose)
             {
-                ps.error_stream << "LEXER: Current char " << *it << "\n";
-                ps.error_stream << "LEXER: New state " << state_idx << "\n";
+                ps.error_stream << "REGEX MATCH: Current char " << *it << "\n";
+                ps.error_stream << "REGEX MATCH: New state " << state_idx << "\n";
             }
 
             ++it;
@@ -1094,8 +1039,8 @@ struct no_context
     using type = no_context;
 };
 
-template<typename DFA, size_t SSize, size_t... N, size_t... I>
-constexpr bool create_lexer_impl(DFA& sm, cstream<SSize>& error_stream, std::index_sequence<I...>, const std::tuple<term<N>...>& ts);
+template<typename DFA, size_t... N, size_t... I>
+constexpr void create_lexer_impl(DFA& sm, std::index_sequence<I...>, const std::tuple<term<N>...>& ts);
 
 struct parse_options
 {
@@ -1268,7 +1213,7 @@ struct parser<
         analyze_states();
         
         if (!trivial_lexical_analyzer)
-            valid_lexer = create_lexer(lexer_sm, lexer_error_stream, term_tuple);
+            create_lexer(lexer_sm, term_tuple);
     }
 
     constexpr void analyze_eof(eof)
@@ -1762,15 +1707,10 @@ struct parser<
         }
 
         s << "\n" << "LEXICAL ANALYZER" << "\n" << "\n";
-        if (valid_lexer)
-        {
-            if (trivial_lexical_analyzer)
-                s << "Trivial lookup" << "\n";
-            else
-                lexer_sm.write_diag_str(s, term_names);
-        }
+        if (trivial_lexical_analyzer)
+            s << "Trivial lookup" << "\n";
         else
-            s << lexer_error_stream.str();
+            lexer_sm.write_diag_str(s, term_names);
     }
     
     template<typename F, typename LValueType, typename... RValueType, size_t... I>
@@ -1849,9 +1789,8 @@ struct parser<
     template<typename ParserState>
     constexpr void syntax_error(ParserState& ps, size16_t term_idx) const
     {
-        cstream<100> str;
-        str << "Unexpected '" << term_names[term_idx] << "'";
-        ps.error_stream << "Syntax error: " << str.str() << "\n";
+        ps.error_stream << "Syntax error: " << 
+            "Unexpected '" << term_names[term_idx] << "'" << "\n";
     }
 
     template<typename ParserState>
@@ -2033,8 +1972,6 @@ struct parser<
     value_reductor value_reductors[rule_count] = {};
     using dfa_type = dfa<total_regex_size * 2>;
     dfa_type lexer_sm = {};
-    bool valid_lexer = true;
-    cstream<20000> lexer_error_stream;
 };
 
 template<size_t S>
@@ -2076,37 +2013,6 @@ constexpr auto rules(Rules&&... rules)
 {
     return std::make_tuple(std::move(rules)...);
 }
-
-template<size_t S>
-struct use_const_message
-{
-    using type = cstream<S>;
-};
-
-struct use_string_stream
-{
-    using type = std::stringstream;
-};
-
-template<typename StreamType>
-struct diag_msg
-{
-    template<typename Parser, typename StreamUsage>
-    constexpr diag_msg(const Parser& p, StreamUsage)
-    {
-        p.write_diag_str(stream);
-    }
-        
-    constexpr const StreamType& get_stream() const
-    {
-        return stream;
-    }
-
-    StreamType stream;
-};
-
-template<typename Parser, typename MessageStreamUsage>
-diag_msg(const Parser&, MessageStreamUsage)->diag_msg<typename MessageStreamUsage::type>;
 
 template<typename DFAType>
 constexpr auto create_regex_parser(DFAType& sm)
@@ -2163,13 +2069,13 @@ constexpr auto create_regex_parser(DFAType& sm)
     );
 }
 
-template<typename DFA, size_t SSize, size_t... N, size_t... I>
-constexpr bool create_lexer_impl(DFA& sm, cstream<SSize>& error_stream, std::index_sequence<I...>, const std::tuple<term<N>...>& term_tuple)
+template<typename DFA, size_t... N, size_t... I>
+constexpr void create_lexer_impl(DFA& sm, std::index_sequence<I...>, const std::tuple<term<N>...>& term_tuple)
 {
     using buffer_type = cstring_buffer<max_v<N...>>;
     
     auto p = create_regex_parser(sm);
-    auto single_f = [&p, &sm, &error_stream](const auto& t, size_t idx)
+    auto single_f = [&p, &sm](const auto& t, size_t idx)
     { 
         slice prev{0, size32_t(sm.size())};
 
@@ -2182,8 +2088,7 @@ constexpr bool create_lexer_impl(DFA& sm, cstream<SSize>& error_stream, std::ind
         }
         else
         {
-            cstream<SSize> stream;
-            std::optional<slice> res = p.parse(buffer_type(t.data), stream);
+            std::optional<slice> res = p.parse(buffer_type(t.data));
                 
             if (res.has_value())
             {
@@ -2192,73 +2097,16 @@ constexpr bool create_lexer_impl(DFA& sm, cstream<SSize>& error_stream, std::ind
                 return true;
             }
             else
-            {   
-                error_stream << "Regex " << t.data << " parse error: \n" << stream.str();
-                return false;
-            }
+                throw std::runtime_error("Regex parse error");
         }
     };
 
-    return (true && ... && single_f(std::get<I>(term_tuple), I));
+    (void(single_f(std::get<I>(term_tuple), I)), ...);
 }
 
-template<typename DFA, size_t SSize, size_t... N>
-constexpr bool create_lexer(DFA& sm, cstream<SSize>& error_stream, const std::tuple<term<N>...>& ts)
+template<typename DFA, size_t... N>
+constexpr void create_lexer(DFA& sm, const std::tuple<term<N>...>& ts)
 {
-    return create_lexer_impl(sm, error_stream, std::make_index_sequence<sizeof...(N)>{}, ts);
+    create_lexer_impl(sm, std::make_index_sequence<sizeof...(N)>{}, ts);
 }
-
-template<typename ValueType, typename ContextType, typename ErrorStreamType>
-struct parse_result
-{
-    ErrorStreamType error_stream;
-    std::optional<ValueType> value;
-    ContextType context;
-    parse_options options;
-
-    template<typename Parser, typename Buffer, typename ErrorStreamUsage>
-    constexpr parse_result(const Parser& p, parse_options options, const Buffer& buffer, ErrorStreamUsage)
-    {
-        value = p.parse_in_context(options, buffer, context, error_stream);
-    }
-
-    template<typename Parser, typename Buffer, typename ErrorStreamUsage>
-    constexpr parse_result(const Parser& p, const Buffer& buffer, ErrorStreamUsage)
-    {
-        value = p.parse_in_context(parse_options{}, buffer, context, error_stream);
-    }
-    
-    template<typename Parser, typename Buffer>
-    constexpr parse_result(const Parser& p, parse_options options, const Buffer& buffer)
-    {
-        value = p.parse_in_context(options, buffer, context, error_stream);
-    }
-
-    template<typename Parser, typename Buffer>
-    constexpr parse_result(const Parser& p, const Buffer& buffer)
-    {
-        value = p.parse_in_context(parse_options{}, buffer, context, error_stream);
-    }
-
-    constexpr const auto& get_error_stream() const { return error_stream; }
-    constexpr const auto& get_value() const { return value.value(); }
-    constexpr bool get_success() const { return value.has_value(); }
-    constexpr const auto& get_context() const { return context; }
-};
-
-template<typename Parser, typename Buffer, typename ErrorStreamUsage>
-parse_result(const Parser&, parse_options, const Buffer&, ErrorStreamUsage)
-->parse_result<typename Parser::root_value_type, typename Parser::context_type, typename ErrorStreamUsage::type>;
-
-template<typename Parser, typename Buffer, typename ErrorStreamUsage>
-parse_result(const Parser&, const Buffer&, ErrorStreamUsage)
-->parse_result<typename Parser::root_value_type, typename Parser::context_type, typename ErrorStreamUsage::type>;
-
-template<typename Parser, typename Buffer>
-parse_result(const Parser&, parse_options, const Buffer&)
-->parse_result<typename Parser::root_value_type, typename Parser::context_type, no_stream>;
-
-template<typename Parser, typename Buffer>
-parse_result(const Parser&, const Buffer&)
-->parse_result<typename Parser::root_value_type, typename Parser::context_type, no_stream>;
 
