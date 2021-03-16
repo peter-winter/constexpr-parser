@@ -47,12 +47,12 @@ constexpr parser p(
     terms(number, o_plus, o_minus, o_mul, o_div, '(', ')'),
     nterms(expr),
     rules(
-        expr(expr, "+", expr) >= binary_op{},
-        expr(expr, "-", expr) >= binary_op{},
-        expr(expr, "*", expr) >= binary_op{},
-        expr(expr, "/", expr) >= binary_op{},
-        expr("-", expr)[3] >= [](auto, int x) { return -x; },
-        expr("(", expr, ")") >= [](auto, int x, auto) { return x; },
+        expr(expr, '+', expr) >= binary_op{},
+        expr(expr, '-', expr) >= binary_op{},
+        expr(expr, '*', expr) >= binary_op{},
+        expr(expr, '/', expr) >= binary_op{},
+        expr('-', expr)[3] >= [](auto, int x) { return -x; },
+        expr('(', expr, ')') >= [](auto, int x, auto) { return x; },
         expr(number) >= [](auto sv) { return get_int(sv); }
     ),
     no_context{},

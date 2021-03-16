@@ -1,6 +1,6 @@
 #include <iostream>
 #include "../constexpr-parser.hpp"
-
+/*
 template<typename DFA>
 struct rp
 {
@@ -13,7 +13,7 @@ struct rp
         opts.verbose = true;
         auto s = p.parse(opts, cstring_buffer(r), error_stream);
         valid = s.has_value();
-        name_table<2> tn{"t1", "t2"};
+        str_table<2> tn{"t1", "t2"};
         sm.write_diag_str(sm_diag_stream, tn);
     }
     
@@ -32,8 +32,28 @@ int main()
     //std::cout << ob.diag_stream.str();
     std::cout << "\nRegex verbose parse: \n\n";
     std::cout << ob.error_stream.str() << "\n";
-    if (ob.valid)
-        std::cout << ob.sm_diag_stream.str();
+    std::cout << ob.sm_diag_stream.str();
     return 0;
 }
 
+*/
+
+constexpr nterm<int> expr("expr");
+
+constexpr term o_plus('+', 1);
+
+constexpr parser p(
+    expr,
+    terms(o_plus),
+    nterms(expr),
+    rules(
+        expr('+', '+') >= [](skip, skip){return 1;}
+    ),
+    no_context{},
+    deduce_max_states{}
+);
+
+int main()
+{
+    return 0;
+}

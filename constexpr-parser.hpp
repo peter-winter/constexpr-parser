@@ -266,8 +266,8 @@ constexpr Container& sort(Container& c, Pred p)
     return c;
 }
 
-template<typename T, size_t N1, size_t N2, size_t... I>
-constexpr void copy_array(T (&a1)[N1], const T (&a2)[N2], std::index_sequence<I...>)
+template<typename T, size_t... I>
+constexpr void copy_array(T *a1, const T* a2, std::index_sequence<I...>)
 {
     (void(a1[I] = a2[I]), ...);
 }
@@ -367,10 +367,12 @@ template<typename... T>
 constexpr int sum_size = (0 + ... + sizeof(T));
 
 template<size_t N>
-using name_table = const char* [N];
+using str_table = const char* [N];
 
 template<typename T>
 constexpr size_t distinct_values_count = 1 << (sizeof(T) * 8);
+
+constexpr size_t distinct_chars_count = distinct_values_count<char>;
 
 constexpr size_t char_to_idx(char c)
 {
@@ -381,6 +383,38 @@ constexpr char idx_to_char(size_t idx)
 {
     return char(int(idx) + std::numeric_limits<char>::min());
 }
+
+struct char_names
+{
+    const static size_t name_size = 5;
+
+    constexpr char_names()
+    {
+        for (size_t i = 0; i < distinct_chars_count; ++i)
+        {
+            char d[] = {'0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'A', 'B', 'C', 'D', 'E', 'F'};
+            if (idx_to_char(i) > 32 && idx_to_char(i) < 127)
+            {
+                arr[i][0] = idx_to_char(i);
+                arr[i][1] = 0;
+            }
+            else
+            {
+                arr[i][0] = '\\';
+                arr[i][1] = 'x';
+                arr[i][2] = d[i / 16];
+                arr[i][3] = d[i % 16];
+                arr[i][4] = 0;
+            }
+        }
+    }
+
+    constexpr const char* name(char c) const { return arr[char_to_idx(c)]; }
+
+    char arr[distinct_chars_count][name_size] = {};
+};
+
+constexpr char_names c_names = {};
 
 template<typename Buffer, size_t EmptyRulesCount>
 struct parse_table_cursor_stack_type
@@ -508,7 +542,7 @@ struct no_stream
 };
 
 template<size_t N>
-constexpr size_t find_name(const name_table<N>& table, const char* name)
+constexpr size_t find_str(const str_table<N>& table, const char* name)
 {
     size_t res = 0;
     for (const auto& n : table)
@@ -577,19 +611,9 @@ struct fake_root
 {
     using value_type = ValueType;
 
-    template<typename... Args>
-    constexpr auto operator()(Args&&... args) const;
+    constexpr auto operator()(const nterm<ValueType>& nt) const;
 
     constexpr static const char* get_name() { return "##"; };
-};
-
-template<typename L, typename...R>
-struct move_construct
-{
-    L operator()(R&&... r) const
-    {
-        return L(std::move(r)...);
-    }
 };
 
 template<typename F, typename L, typename...R>
@@ -602,6 +626,10 @@ struct rule
     std::tuple<R...> r;
     static const size_t n = sizeof...(R);
     int precedence;
+
+    constexpr rule(L l, std::tuple<R...> r) :
+        f(nullptr), l(l), r(r), precedence(0)
+    {}
 
     template<typename F1>
     constexpr rule(F1&& f, L l, std::tuple<R...> r) :
@@ -624,6 +652,9 @@ struct rule
         return rule<std::decay_t<F1>, L, R...>(std::move(f), l, r, precedence);
     }
 };
+
+template<typename L, typename... R>
+rule(L l, std::tuple<R...> r) -> rule<std::nullptr_t, L, R...>;
 
 enum class associativity { ltor, rtol };
 
@@ -661,143 +692,125 @@ include(const char(&)[N])->include<N>;
 
 using term_value_type = str_view;
 
-template<size_t N>
+template<size_t DataSize>
 struct term
 {
     using value_type = term_value_type;
 
     constexpr term(char c, int precedence = 0, associativity a = associativity::ltor) :
-        name(c),
         precedence(precedence), ass(a),  
         method(term_method::exact)
     {
         data[0] = c;
+        copy_array(id, c_names.name(c), std::make_index_sequence<char_names::name_size>{});
     }
 
-    template<size_t N1>
-    constexpr term(const char (&source)[N1], const char* name = nullptr, int precedence = 0, associativity a = associativity::ltor) :
-        name(name ? name : source), precedence(precedence), ass(a),  
+    template<size_t N>
+    constexpr term(const char (&source)[N], const char *custom_name, int precedence = 0, associativity a = associativity::ltor) :
+        precedence(precedence), ass(a),  
+        method(term_method::regex),
+        custom_name(custom_name)
+    {
+        copy_array(data, source, std::make_index_sequence<N>{});
+        id[0] = 'r';
+        id[1] = '_';
+        copy_array(&id[2], source, std::make_index_sequence<N>{});
+    }
+
+    template<size_t N>
+    constexpr term(const char (&source)[N], int precedence = 0, associativity a = associativity::ltor) :
+        precedence(precedence), ass(a),  
         method(term_method::regex)
     {
-        copy_array(data, source, std::make_index_sequence<N1>{});
-        check();
+        copy_array(data, source, std::make_index_sequence<N>{});
+        id[0] = 'r';
+        id[1] = '_';
+        copy_array(&id[2], source, std::make_index_sequence<N>{});
     }
 
-    template<size_t N1>
-    constexpr term(exclude<N1> ex, const char* name = nullptr, int precedence = 0, associativity a = associativity::ltor) :
-        name(name ? name : ex.data), precedence(precedence), ass(a), 
+    template<size_t N>
+    constexpr term(exclude<N> ex, const char *custom_name, int precedence = 0, associativity a = associativity::ltor) :
+        custom_name(custom_name), precedence(precedence), ass(a), 
         method(term_method::exclude)
     {
-        copy_array(data, ex.data, std::make_index_sequence<N1>{});
-        check();
+        copy_array(data, ex.data, std::make_index_sequence<N>{});
+        id[0] = 'e';
+        id[1] = '_';
+        copy_array(&id[2], ex.data, std::make_index_sequence<N>{});
     }
 
-    template<size_t N1>
-    constexpr term(include<N1> in, const char* name = nullptr, int precedence = 0, associativity a = associativity::ltor) :
-        name(name ? name : in.data), precedence(precedence), ass(a), 
+    template<size_t N>
+    constexpr term(include<N> in, const char *custom_name, int precedence = 0, associativity a = associativity::ltor) :
+        custom_name(custom_name), precedence(precedence), ass(a), 
         method(term_method::include)
     {
-        copy_array(data, in.data, std::make_index_sequence<N1>{});
-        check();
-    }
-
-    constexpr void check()
-    {
-        if (data[0] == 0)
-            throw std::runtime_error("empty string not allowed");
-        if (get_name() == nullptr)
-            throw std::runtime_error("nullptr name not allowed");
+        copy_array(data, in.data, std::make_index_sequence<N>{});
+        id[0] = 'i';
+        id[1] = '_';
+        copy_array(&id[2], in.data, std::make_index_sequence<N>{});
     }
     
-    constexpr const char* get_name() const { return method == term_method::exact ? name.single_char : name.str; }
+    constexpr const char* get_name() const { return custom_name ? custom_name : id; }
+    constexpr const char* get_id() const { return id; }
 
     constexpr bool is_trivial() const 
     { 
         return method != term_method::regex;
     }
 
-    char data[N] = {};
+    char data[DataSize] = {};
     int precedence;
     associativity ass;
-    union _name
-    {
-        constexpr _name(const char* str): 
-            str(str)
-        {}
-
-        constexpr _name(char c): 
-            single_char{c, 0}
-        {}
-
-        const char* str = nullptr;
-        char single_char[2];
-    } name;
-    
+    char id[DataSize + 10] = {};
+    const char* custom_name = nullptr;
     term_method method;
 };
 
 term(char c, int = 0, associativity = associativity::ltor) -> term<1>;
 
 template<size_t N>
-term(const char (&)[N], const char* = nullptr, int = 0, associativity = associativity::ltor) -> term<N>;
+term(const char (&)[N], int = 0, associativity = associativity::ltor) -> term<N>;
 
 template<size_t N>
-term(exclude<N>, const char* = nullptr, int = 0, associativity = associativity::ltor) -> term<N>;
+term(const char (&)[N], const char *, int = 0, associativity = associativity::ltor) -> term<N>;
 
 template<size_t N>
-term(include<N>, const char* = nullptr, int = 0, associativity = associativity::ltor) -> term<N>;
+term(exclude<N>, const char *, int = 0, associativity = associativity::ltor) -> term<N>;
+
+template<size_t N>
+term(include<N>, const char *, int = 0, associativity = associativity::ltor) -> term<N>;
 
 struct eof
 {
     constexpr static const char* get_name() { return "<eof>"; }
 };
 
-template<typename T>
-using value_type_t = typename T::value_type;
-
-template<typename T>
-struct symbol_type
+template<typename Arg>
+constexpr auto make_rule_item(Arg&& arg)
 {
-    using type = T;
-};
+    return term(arg);
+}
 
-template<size_t N>
-struct symbol_type<char [N]>
+template<typename ValueType>
+constexpr auto make_rule_item(const nterm<ValueType>& nt)
 {
-    using type = term<N>;
-};
-
-template<>
-struct symbol_type<char>
-{
-    using type = term<1>;
-};
-
-template<typename T>
-using symbol_type_t = typename symbol_type<std::remove_cv_t<std::remove_reference_t<T>>>::type;
+    return nt;
+}
 
 template<typename ValueType>
 template<typename... Args>
 constexpr auto nterm<ValueType>::operator()(Args&&... args) const
 {
-    using f_type = move_construct<ValueType, value_type_t<symbol_type_t<Args>>...>;
-    return rule<f_type, nterm<ValueType>, symbol_type_t<Args>...>(
-        f_type{}, 
+    return rule(
         *this, 
-        std::make_tuple(symbol_type_t<Args>(args)...)
+        std::make_tuple(make_rule_item(args)...)
     );
 }
 
 template<typename ValueType>
-template<typename... Args>
-constexpr auto fake_root<ValueType>::operator()(Args&&... args) const
+constexpr auto fake_root<ValueType>::operator()(const nterm<ValueType>& nt) const
 {
-    using f_type = move_construct<ValueType, ValueType>;
-    return rule<f_type, fake_root<ValueType>, symbol_type_t<Args>...>(
-        f_type{}, 
-        *this, 
-        std::make_tuple(symbol_type_t<Args>(args)...)
-    );
+    return rule(*this, std::make_tuple(nt));
 }
 
 using conflicted_terms = size16_t[4];
@@ -986,7 +999,7 @@ struct dfa
     constexpr size_t size() const { return states.size(); }
 
     template<typename Stream, size_t N>
-    constexpr void write_state_diag_str(const dfa_state& st, Stream& s, size16_t idx, const name_table<N>& term_names) const
+    constexpr void write_state_diag_str(const dfa_state& st, Stream& s, size16_t idx, const str_table<N>& term_names) const
     {
         s << "STATE " << idx;
         if (st.unreachable)
@@ -1002,31 +1015,21 @@ struct dfa
             s << term_names[term_idx];
         s << "\n";
 
-        auto f_char = [&s](char c)
-        {
-            unsigned int x = (c & 0xff);
-            char d[] = {'0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'A', 'B', 'C', 'D', 'E', 'F'};
-            if (c > 32 && c < 127)
-                s << c;
-            else
-                s << "\\x" << d[x / 16] << d[x % 16];
-        };
-
-        auto f_range = [&s, f_char](const auto& r, size16_t state_idx)
+        auto f_range = [&s](const auto& r, size16_t state_idx)
         {
             if (r.size() > 2)
             {
                 s << "[";
-                f_char(r.front());
+                c_names.name(r.front());
                 s << " - ";
-                f_char(r.back());
+                c_names.name(r.back());
                 s << "] -> " << state_idx << "  ";
             }
             else
             {
                 for (char c : r)
                 {
-                    f_char(c);
+                    c_names.name(c);
                     s << " -> " << state_idx << "  ";
                 }
             }
@@ -1041,7 +1044,7 @@ struct dfa
                 tmp.push_back(idx_to_char(i));
             else 
             {
-                if (prev != uninitialized)
+                if (prev != uninitialized16)
                 {
                     f_range(tmp, prev);
                     tmp.clear();
@@ -1055,7 +1058,7 @@ struct dfa
     }
 
     template<typename Stream, size_t N>
-    constexpr void write_diag_str(Stream& s, const name_table<N>& term_names) const
+    constexpr void write_diag_str(Stream& s, const str_table<N>& term_names) const
     {
         for (size_t i = 0; i < states.size(); ++i)
         {
@@ -1278,6 +1281,7 @@ struct parser
     constexpr void analyze_eof(eof)
     {
         term_names[eof_idx] = eof::get_name();
+        term_ids[eof_idx] = eof::get_name();
         term_precedences[eof_idx] = 0;
         term_associativities[eof_idx] = associativity::ltor;
     }
@@ -1311,6 +1315,7 @@ struct parser
     constexpr void analyze_term(term<N> t, size16_t idx)
     {
         term_names[idx] = t.get_name();
+        term_ids[idx] = t.get_id();
         term_precedences[idx] = t.precedence;
         term_associativities[idx] = t.ass;
 
@@ -1333,15 +1338,15 @@ struct parser
     }
 
     template<size_t N>
-    constexpr auto make_symbol(term<N> t) const
+    constexpr auto make_symbol(const term<N>& t) const
     {
-        return symbol{ true, size16_t(find_name(term_names, t.get_name())) };
+        return symbol{ true, size16_t(find_str(term_ids, t.get_id())) };
     }
 
     template<typename ValueType>
-    constexpr auto make_symbol(nterm<ValueType> nt) const
+    constexpr auto make_symbol(const nterm<ValueType>& nt) const
     {
-        return symbol{ false, size16_t(find_name(nterm_names, nt.name)) };
+        return symbol{ false, size16_t(find_str(nterm_names, nt.name)) };
     }
     
     template<typename... Terms, size_t... I>
@@ -1410,10 +1415,13 @@ struct parser
         return 0;
     }
 
+    template<typename T>
+    using value_type_t = typename T::value_type;
+
     template<size_t Nr, typename F, typename L, typename... R, size_t... I>
     constexpr void analyze_rule(rule<F, L, R...>&& r, std::index_sequence<I...>)
     {
-        size16_t l_idx = size16_t(find_name(nterm_names, r.l.get_name()));
+        size16_t l_idx = size16_t(find_str(nterm_names, r.l.get_name()));
         (void(right_sides[Nr][I] = make_symbol(std::get<I>(r.r))), ...);
         constexpr size16_t rule_elements_count = size16_t(sizeof...(R));
         rule_infos[Nr] = { l_idx, size16_t(Nr), rule_elements_count };
@@ -1783,9 +1791,19 @@ struct parser
     constexpr static LValueType reduce_value_impl(const F& f, value_variant_type* start, std::index_sequence<I...>, context_type& context)
     {
         if constexpr (std::is_same_v<context_type, no_context>)
-            return LValueType(f(std::get<RValueType>(std::move(*(start + I)))...));
+        {
+            if constexpr (std::is_same_v<F, std::nullptr_t>)
+                return LValueType(std::get<RValueType>(std::move(*(start + I)))...);
+            else
+                return LValueType(f(std::get<RValueType>(std::move(*(start + I)))...));
+        }
         else
-            return LValueType(f(context, std::get<RValueType>(std::move(*(start + I)))...));
+        {
+            if constexpr (std::is_same_v<F, std::nullptr_t>)
+                return LValueType(context, std::get<RValueType>(std::move(*(start + I)))...);
+            else
+                return LValueType(f(context, std::get<RValueType>(std::move(*(start + I)))...));
+        }
     }
 
     template<size_t RuleIdx, typename F, typename LValueType, typename... RValueType>
@@ -2003,8 +2021,9 @@ struct parser
         return root_value;
     }
 
-    name_table<term_count> term_names = { };
-    name_table<nterm_count> nterm_names = { };
+    str_table<term_count> term_names = { };
+    str_table<term_count> term_ids = { };
+    str_table<nterm_count> nterm_names = { };
     symbol right_sides[rule_count][max_rule_element_count] = { };
     rule_info rule_infos[rule_count] = { };
     slice nterm_rule_slices[nterm_count] = { };
@@ -2161,7 +2180,7 @@ constexpr auto create_regex_parser(DFAType& sm)
             primary('.') >= [&sm](skip) { return sm.add_primary_any_char(); },
             primary('[', c_subset, ']') >= [&sm](skip, char_subset&& s, skip) { return sm.add_primary_char_subset(s); },
             primary('[', '^', c_subset, ']') >= [&sm](skip, skip, char_subset&& s, skip) { return sm.add_primary_char_subset_exclusive(s); },
-            primary("(", expr, ")") >= [](skip, slice p, skip) { return p; },
+            primary('(', expr, ')') >= [](skip, slice p, skip) { return p; },
             q_expr(primary) >= [](slice p) { return p; },
             q_expr(primary, '*') >= [&sm](slice p, skip) { return sm.add_multiplication(p); },
             q_expr(primary, '?') >= [&sm](slice p, skip) { return sm.add_optional(p); },
