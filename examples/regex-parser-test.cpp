@@ -1,7 +1,11 @@
 #include <iostream>
 #include <sstream>
 
-#include "../constexpr-parser.hpp"
+#include "../ctpg.hpp"
+
+using namespace ctpg;
+using namespace ctpg::buffers;
+using namespace ctpg::lexer;
 
 template<size_t N>
 struct regex
@@ -21,19 +25,19 @@ struct regex
         {
             bool verbose = false;
         } options;
-        no_stream error_stream;
+        detail::no_stream error_stream;
     };
 
     template<size_t N1>
     constexpr bool match(const char(&str)[N1]) const
     {
         simple_state ss;
-        cstring_buffer buf(str);
+        ctpg::buffers::cstring_buffer buf(str);
         auto res = sm.recognize(buf.begin(), buf.end(), ss);
         return res.term_idx == 0 && res.it == buf.end();
     }
     
-    dfa<N * 2> sm;
+    ctpg::lexer::dfa<N * 2> sm;
 };
 
 template<size_t N>

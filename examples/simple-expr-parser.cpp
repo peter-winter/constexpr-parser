@@ -1,6 +1,9 @@
-#include "../constexpr-parser.hpp"
+#include "../ctpg.hpp"
 #include <iostream>
 #include <sstream>
+
+using namespace ctpg;
+using namespace ctpg::buffers;
 
 struct binary_op
 {
