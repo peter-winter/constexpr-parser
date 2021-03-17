@@ -524,11 +524,43 @@ enum class associativity { ltor, rtol };
 
 enum class term_method { exact, exclude, include, regex };
 
+struct source_point
+{
+    size32_t line = 1;
+    size32_t column = 1;
+
+    friend std::ostream& operator << (std::ostream& o, const source_point& sp);
+};
+
+std::ostream& operator << (std::ostream& o, const source_point& sp)
+{
+    o << "[" << sp.line << ":" << sp.column << "]: ";
+    return o;
+}
+
+template<typename VT>
+class term_value
+{
+public:
+    constexpr term_value(VT v, size32_t line, size32_t column):
+        value(v), sp{ line, column }
+    {}
+
+    constexpr operator VT() const { return value; }
+    constexpr size32_t get_line() const { return sp.line; }
+    constexpr size32_t get_column() const { return sp.column; }
+    constexpr const VT& get_value() const { return value; }
+
+private:
+    VT value;
+    source_point sp;
+};
+
 template<size_t DataSize, typename ValueType>
 class term
 {
 public:
-    using value_type = ValueType;
+    using value_type = term_value<ValueType>;
 
     static const size_t data_size = DataSize;
 
@@ -747,6 +779,13 @@ namespace lexer
 
     struct char_range
     {
+        constexpr char_range(char c):
+            start(c), end(c)
+        {}
+
+        constexpr char_range(char c1, char c2):
+            start(c1), end(c2)
+        {}
         char start;
         char end;
     };
@@ -893,7 +932,7 @@ namespace lexer
 
                     if (ps.options.verbose)
                     {
-                        ps.error_stream << "REGEX MATCH: Recognized " << rec_idx << "\n";
+                        ps.error_stream << ps.current_sp << "REGEX MATCH: Recognized " << rec_idx << "\n";
                     }
                 }
                 
@@ -908,8 +947,8 @@ namespace lexer
 
                 if (ps.options.verbose)
                 {
-                    ps.error_stream << "REGEX MATCH: Current char " << *it << "\n";
-                    ps.error_stream << "REGEX MATCH: New state " << state_idx << "\n";
+                    ps.error_stream << ps.current_sp << "REGEX MATCH: Current char " << *it << "\n";
+                    ps.error_stream << ps.current_sp << "REGEX MATCH: New state " << state_idx << "\n";
                 }
 
                 ++it;
@@ -1095,7 +1134,8 @@ namespace detail
             cursor_stack(cursor_stack),
             value_stack(value_stack),
             error_stream(error_stream),
-            options(options)
+            options(options),
+            current_sp{1, 1}
         {
             cursor_stack.reserve(cursor_stack_initial_capacity);
             value_stack.reserve(value_stack_initial_capacity);
@@ -1105,6 +1145,7 @@ namespace detail
         ValueStack& value_stack;
         ErrorStream& error_stream;
         parse_options options;
+        source_point current_sp;
     };
 
     struct no_stream
@@ -1229,14 +1270,16 @@ public:
     template<typename Buffer, typename ErrorStream>
     constexpr std::optional<root_value_type> parse(parse_options options, const Buffer& buffer, ErrorStream& error_stream) const
     {
+        using iterator = buffers::iterator_t<Buffer>;
+
         detail::parser_value_stack_type_t<Buffer, empty_rules_count, value_variant_type> value_stack{};
         detail::parse_table_cursor_stack_type_t<Buffer, empty_rules_count> cursor_stack{};
         
         detail::parser_state ps(cursor_stack, value_stack, error_stream, options);
 
         bool error = false;
-        buffers::iterator_t<Buffer> it = buffer.begin();
-        buffers::iterator_t<Buffer> term_end = it;
+        iterator it = buffer.begin();
+        iterator term_end = it;
         size16_t term_idx = uninitialized16;
         
         ps.cursor_stack.push_back(0);
@@ -1249,7 +1292,11 @@ public:
             if (it == term_end)
             {
                 if (ps.options.skip_whitespace)
-                    it = skip_whitespace(it, buffer.end());
+                {
+                    iterator after_ws = skip_whitespace(it, buffer.end());
+                    update_source_point(ps, it, after_ws);
+                    it = after_ws;
+                }
 
                 auto res = get_next_term(ps, it, buffer.end());
                 term_end = res.it;
@@ -1270,6 +1317,7 @@ public:
             if (entry.kind == parse_table_entry_kind::shift)
             {
                 shift(ps, buffer.get_view(it, term_end), term_idx, entry.shift);
+                update_source_point(ps, it, term_end);
                 it = term_end;
             }
             else if (entry.kind == parse_table_entry_kind::reduce)
@@ -1324,7 +1372,12 @@ private:
     static const size_t situation_address_space_size = rule_count * situation_size * term_count;    
     static const size_t total_regex_size = (0 + ... + DataSize);
 
-    using value_variant_type = meta::unique_types_variant_t<char, std::string_view, NTermValueType...>;
+    using value_variant_type = meta::unique_types_variant_t<
+        std::nullptr_t,
+        term_value<char>, 
+        term_value<std::string_view>, 
+        NTermValueType...
+    >;
     using term_subset = stdex::cbitset<term_count>;
     using nterm_subset = stdex::cbitset<nterm_count>;
     using right_side_slice_subset = stdex::cbitset<situation_size * rule_count>;
@@ -1890,13 +1943,13 @@ private:
     constexpr void shift(ParserState& ps, const std::string_view& sv, size16_t term_idx, size16_t new_cursor_value) const
     {
         if (ps.options.verbose)
-            ps.error_stream << "Shift to " << new_cursor_value << ", term: " << sv << "\n";
+            ps.error_stream << ps.current_sp << "PARSE: Shift to " << new_cursor_value << ", term: " << sv << "\n";
         ps.cursor_stack.push_back(new_cursor_value);
         
         if (single_char_terms.test(term_idx))
-            ps.value_stack.emplace_back(sv[0]);
+            ps.value_stack.emplace_back(term_value<char>(sv[0], 12, 13));
         else
-            ps.value_stack.emplace_back(sv);
+            ps.value_stack.emplace_back(term_value<std::string_view>(sv, 12, 13));
     }
 
     template<typename ParserState>
@@ -1905,7 +1958,7 @@ private:
         const auto& ri = rule_infos[rule_info_idx];
         if (ps.options.verbose)
         {
-            ps.error_stream << "Reduced using rule " << ri.r_idx << "  ";
+            ps.error_stream << ps.current_sp << "PARSE: Reduced using rule " << ri.r_idx << "  ";
             write_rule_diag_str(ps.error_stream, rule_info_idx);
             ps.error_stream << "\n";
         }
@@ -1915,7 +1968,7 @@ private:
         
         if (ps.options.verbose)
         {
-            ps.error_stream << "Go to " << new_cursor_value << "\n";
+            ps.error_stream << ps.current_sp << "PARSE: Go to " << new_cursor_value << "\n";
         }
 
         ps.cursor_stack.push_back(new_cursor_value);
@@ -1930,16 +1983,15 @@ private:
     {
         if (ps.options.verbose)
         {
-            ps.error_stream << "R/R conflict encountered \n";
+            ps.error_stream << ps.current_sp << "PARSE: R/R conflict encountered \n";
         }
         reduce(ps, rule_idx);
     }
 
-
     template<typename ParserState>
     constexpr void syntax_error(ParserState& ps, size16_t term_idx) const
     {
-        ps.error_stream << "Syntax error: " << 
+        ps.error_stream << ps.current_sp << "PARSE: Syntax error: " << 
             "Unexpected '" << term_names[term_idx] << "'" << "\n";
     }
 
@@ -1948,7 +2000,7 @@ private:
     {
         if (ps.options.verbose)
         {
-            ps.error_stream << "Success \n";
+            ps.error_stream << ps.current_sp << "PARSE: Success \n";
         }
         return std::get<root_value_type>(ps.value_stack.front());
     }
@@ -1996,17 +2048,34 @@ private:
         return it;
     }
 
+    template<typename ParserState, typename Iterator>
+    constexpr void update_source_point(ParserState& ps, const Iterator& start, const Iterator& end) const
+    {
+        Iterator it = start;
+        while (!(it == end))
+        {
+            if (*it == '\n')
+            {
+                ++ps.current_sp.line;
+                ps.current_sp.column = 1;
+            }
+            else
+                ++ps.current_sp.column;
+            ++it;
+        }
+    }
+
     template<typename ParserState>
     constexpr void unexpected_char(ParserState& ps, char c) const
     {
-        ps.error_stream << "Unexpected character: " << c << "\n";
+        ps.error_stream << ps.current_sp << "PARSE: Unexpected character: " << c << "\n";
     }
 
     template<typename ParserState>
     constexpr void trace_recognized_term(ParserState& ps, size16_t term_idx) const
     {
         if (ps.options.verbose)
-            ps.error_stream << "Recognized " << term_names[term_idx] << " \n";
+            ps.error_stream << ps.current_sp << "PARSE: Recognized " << term_names[term_idx] << " \n";
     }
     
     str_table<term_count> term_names = { };
@@ -2087,6 +2156,63 @@ struct skip
     constexpr skip(T&&) {};
 };
 
+namespace ftors
+{
+    template<size_t>
+    struct ignore
+    {
+        template<typename T>
+        constexpr ignore(T&&){}
+    };
+
+    template<size_t X, typename = std::make_index_sequence<X - 1>>
+    class element
+    {};
+    
+    template<size_t X, size_t... I>
+    class element<X, std::index_sequence<I...>>
+    {
+    public:
+        template<typename First, typename... Rest>
+        constexpr decltype(auto) operator ()(ignore<I>..., First&& arg, Rest&&...) const
+        {
+            return std::forward<First>(arg);
+        }
+    };
+
+    constexpr element<1> _e1;
+    constexpr element<2> _e2;
+    constexpr element<3> _e3;
+    constexpr element<4> _e4;
+    constexpr element<5> _e5;
+    constexpr element<6> _e6;
+    constexpr element<7> _e7;
+    constexpr element<8> _e8;
+    constexpr element<9> _e9;
+
+    template<typename T>
+    class ret
+    {
+    public:
+        constexpr ret(T&& v):
+            v(std::forward<T>(v))
+        {}
+
+        template<typename... Args>
+        constexpr auto operator ()(Args&&...) const
+        {
+            return v;
+        }
+
+    private:
+        T v;
+    };
+
+    template<typename T>
+    ret(T&&) -> ret<std::decay_t<T>>;
+    
+}
+
 namespace lexer
 {
     template<typename DFAType>
@@ -2094,6 +2220,7 @@ namespace lexer
     {
         using dfa_type = DFAType;
         using slice = utils::slice;
+        using namespace ftors;
         
         constexpr term regular_char(exclude("\\[]^-.*?|()"), "regular", 0, associativity::ltor);
         constexpr nterm<slice> expr("expr");
@@ -2111,26 +2238,26 @@ namespace lexer
             terms(regular_char, '\\', '[', ']', '^', '-', '.', '*', '?', '|', '(', ')'),
             nterms(expr, alt, concat, q_expr, primary, c_range, c_subset, c_subset_item, single_char),
             rules(
-                single_char(regular_char) >= [](char c) { return c; },
-                single_char('\\', '\\') >= [](skip, char c) { return c; },
-                single_char('\\', '[') >= [](skip, char c) { return c; },
-                single_char('\\', ']') >= [](skip, char c) { return c; },
-                single_char('\\', '^') >= [](skip, char c) { return c; },
-                single_char('\\', '-') >= [](skip, char c) { return c; },
-                single_char('\\', '.') >= [](skip, char c) { return c; },
-                single_char('\\', '|') >= [](skip, char c) { return c; },
-                single_char('\\', '(') >= [](skip, char c) { return c; },
-                single_char('\\', ')') >= [](skip, char c) { return c; },
-                c_range(single_char, '-', single_char) >= [](char c1, skip, char c2){ return char_range{c1, c2}; },
-                c_subset_item(single_char) >= [](char c) { return char_range{ c, c}; },
-                c_subset_item(c_range) >= [](char_range r){ return r; },
+                single_char(regular_char),
+                single_char('\\', '\\') >= _e2,
+                single_char('\\', '[') >= _e2,
+                single_char('\\', ']') >= _e2,
+                single_char('\\', '^') >= _e2,
+                single_char('\\', '-') >= _e2,
+                single_char('\\', '.') >= _e2,
+                single_char('\\', '|') >= _e2,
+                single_char('\\', '(') >= _e2,
+                single_char('\\', ')') >= _e2,
+                c_range(single_char, '-', single_char) >= [](char c1, skip, char c2){ return char_range(c1, c2); },
+                c_subset_item(single_char) >= [](char c) { return char_range(c); },
+                c_subset_item(c_range),
                 c_subset(c_subset_item) >= [](char_range r){ return dfa_type::char_subset_from_item(r); },
                 c_subset(c_subset_item, c_subset) >= [](char_range r, char_subset&& s){ return dfa_type::add_item_to_char_subset(std::move(s), r); },
                 primary(single_char) >= [&sm](char c) { return sm.add_primary_single_char(c); },
                 primary('.') >= [&sm](skip) { return sm.add_primary_any_char(); },
                 primary('[', c_subset, ']') >= [&sm](skip, char_subset&& s, skip) { return sm.add_primary_char_subset(s); },
                 primary('[', '^', c_subset, ']') >= [&sm](skip, skip, char_subset&& s, skip) { return sm.add_primary_char_subset_exclusive(s); },
-                primary('(', expr, ')') >= [](skip, slice p, skip) { return p; },
+                primary('(', expr, ')') >= _e2,
                 q_expr(primary),
                 q_expr(primary, '*') >= [&sm](slice p, skip) { return sm.add_multiplication(p); },
                 q_expr(primary, '?') >= [&sm](slice p, skip) { return sm.add_optional(p); },

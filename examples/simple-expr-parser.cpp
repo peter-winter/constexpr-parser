@@ -1,9 +1,12 @@
 #include "../ctpg.hpp"
 #include <iostream>
 #include <sstream>
+#include <functional>
 
 using namespace ctpg;
 using namespace ctpg::buffers;
+using namespace ctpg::ftors;
+using namespace std::placeholders;
 
 struct binary_op
 {
@@ -25,7 +28,7 @@ struct binary_op
     }
 };
 
-constexpr int get_int(const std::string_view& sv)
+constexpr int get_int(std::string_view sv)
 {
     int sum = 0;
     for (size_t i = 0; i < sv.size(); ++i)
@@ -54,9 +57,9 @@ constexpr parser p(
         expr(expr, '-', expr) >= binary_op{},
         expr(expr, '*', expr) >= binary_op{},
         expr(expr, '/', expr) >= binary_op{},
-        expr('-', expr)[3] >= [](auto, int x) { return -x; },
-        expr('(', expr, ')') >= [](auto, int x, auto) { return x; },
-        expr(number) >= [](auto sv) { return get_int(sv); }
+        expr('-', expr)[3] >= [](char, int x) { return -x; },
+        expr('(', expr, ')') >= _e2,
+        expr(number) >= [](const auto& sv){ return get_int(sv); }
     )
 );
 
@@ -72,7 +75,7 @@ int main()
     std::cout << "Fail case: " << b << std::endl;
 
     std::stringstream ss;
-    auto res = p.parse(parse_options{}.set_verbose(true), string_buffer("2 + 2 * 2"), ss);
+    auto res = p.parse(parse_options{}.set_verbose(true), string_buffer("2 + 2 \n* 2"), ss);
     int rv = res.value();
     std::cout << "Runtime case: " << rv << std::endl;
     std::cout << "Verbose output: " << std::endl << ss.str();

@@ -26,6 +26,7 @@ struct regex
             bool verbose = false;
         } options;
         detail::no_stream error_stream;
+        source_point current_sp;
     };
 
     template<size_t N1>
