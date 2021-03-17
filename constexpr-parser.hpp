@@ -7,6 +7,7 @@
 #include <vector>
 #include <optional>
 #include <variant>
+#include <string_view>
 #include <ostream>
 
 using size_t = std::uint64_t;
@@ -126,42 +127,6 @@ struct cvector<T, N, std::enable_if_t<is_cvector_compatible<T>::value>>
     T the_data[N];
     size_type current_size;
 };
-
-struct str_view
-{
-    constexpr str_view(const char* str, size_t size) :
-        str(str), size(size)
-    {}
-
-    constexpr char operator[](size_t idx) const { return *(str + idx); }
-
-    constexpr static bool equal(const char* str1, const char* str2)
-    {
-        if (str1 == str2)
-            return true;
-        if ((str1 == nullptr) ^ (str2 == nullptr))
-            return false;
-        while (*str1 == *str2)
-        {
-            if (*str1 == 0)
-                return true;
-            str1++; str2++;
-        }
-        return false;
-    }
-
-    friend std::ostream& operator << (std::ostream& s, const str_view& sv);
-
-    const char* str;
-    size_t size;
-};
-
-std::ostream& operator << (std::ostream& s, const str_view& sv) 
-{
-    for (size_t i = 0; i < sv.size; ++i)
-        s << sv.str[i];
-    return s; 
-} 
 
 template<std::size_t N>
 struct cbitset
@@ -296,7 +261,7 @@ struct cstring_buffer
 
     constexpr iterator begin() const { return iterator{ data }; }
     constexpr iterator end() const { return iterator{ data + N - 1 }; }
-    constexpr str_view view(const iterator& start, const iterator& end) const { return str_view(start.ptr, end.ptr - start.ptr); }
+    constexpr std::string_view get_view(const iterator& start, const iterator& end) const { return std::string_view(start.ptr, end.ptr - start.ptr); }
 
     char data[N] = { 0 };
 };
@@ -314,13 +279,16 @@ struct string_buffer
         str(str)
     {}
 
-    auto begin() const { return str.begin(); }
-    auto end() const { return str.end(); }
-    str_view view(const std::string::iterator& it, size_t size) const
-    { 
-        return str_view(str.data() + (it - str.begin()), size);
-    }
+    auto begin() const { return str.cbegin(); }
+    auto end() const { return str.cend(); }
+    
+    using iterator = std::string::const_iterator;
 
+    std::string_view get_view(const iterator& start, const iterator& end) const
+    { 
+        return std::string_view(str.data() + (start - str.begin()), end - start);
+    }
+    
     std::string str;
 };
 
@@ -435,7 +403,9 @@ using parse_table_cursor_stack_type_t = typename parse_table_cursor_stack_type<B
 
 template<typename Buffer, size_t EmptyRulesCount, typename ValueVariantType, typename = void>
 struct parser_value_stack_type
-{};
+{
+    using type = std::vector<ValueVariantType>;
+};
 
 template<size_t N, size_t EmptyRulesCount, typename ValueVariantType>
 struct parser_value_stack_type<cstring_buffer<N>, EmptyRulesCount, ValueVariantType, std::enable_if_t<!is_cvector_compatible<ValueVariantType>::value>>
@@ -459,18 +429,34 @@ struct recognized_term
     size16_t term_idx;
 };
 
+constexpr bool str_equal(const char* str1, const char* str2)
+{
+    if (str1 == str2)
+        return true;
+    if ((str1 == nullptr) ^ (str2 == nullptr))
+        return false;
+    while (*str1 == *str2)
+    {
+        if (*str1 == 0)
+            return true;
+        str1++; str2++;
+    }
+    return false;
+}
+
 template<size_t N>
 constexpr size_t find_str(const str_table<N>& table, const char* str)
 {
     size_t res = 0;
     for (const auto& n : table)
     {
-        if (str_view::equal(n, str))
+        if (str_equal(n, str))
             return res;
         res++;
     }
-    if (res == std::size(table))
+    if (res == N)
         throw std::runtime_error("string not found");
+    return uninitialized;
 }
 
 constexpr size_t find_char(char c, const char* str)
@@ -607,12 +593,11 @@ struct include
 template<size_t N>
 include(const char(&)[N])->include<N>;
 
-using term_value_type = str_view;
-
-template<size_t DataSize>
+template<size_t DataSize, typename ValueType>
 struct term
 {
-    using value_type = term_value_type;
+    using value_type = ValueType;
+
     static const size_t data_size = DataSize;
 
     constexpr term(char c, int precedence = 0, associativity a = associativity::ltor) :
@@ -684,19 +669,19 @@ struct term
     term_method method;
 };
 
-term(char c, int = 0, associativity = associativity::ltor) -> term<1>;
+term(char c, int = 0, associativity = associativity::ltor) -> term<1, char>;
 
 template<size_t N>
-term(const char (&)[N], int = 0, associativity = associativity::ltor) -> term<N>;
+term(const char (&)[N], int = 0, associativity = associativity::ltor) -> term<N, std::string_view>;
 
 template<size_t N>
-term(const char (&)[N], const char *, int = 0, associativity = associativity::ltor) -> term<N>;
+term(const char (&)[N], const char *, int = 0, associativity = associativity::ltor) -> term<N, std::string_view>;
 
 template<size_t N>
-term(exclude<N>, const char *, int = 0, associativity = associativity::ltor) -> term<N>;
+term(exclude<N>, const char *, int = 0, associativity = associativity::ltor) -> term<N, char>;
 
 template<size_t N>
-term(include<N>, const char *, int = 0, associativity = associativity::ltor) -> term<N>;
+term(include<N>, const char *, int = 0, associativity = associativity::ltor) -> term<N, char>;
 
 struct eof
 {
@@ -1028,40 +1013,31 @@ struct dfa
     dfa_state_container_type states = {};
 };
 
-template<typename C>
-struct use_context
-{
-    using type = C;
-};
-
-struct no_context
-{
-    using type = no_context;
-};
-
-template<typename DFA, size_t... N, size_t... I>
-constexpr void create_lexer_impl(DFA& sm, std::index_sequence<I...>, const std::tuple<term<N>...>& ts);
+template<typename DFA, size_t... N, typename... VT, size_t... I>
+constexpr void create_lexer_impl(DFA& sm, std::index_sequence<I...>, const std::tuple<term<N, VT>...>& ts);
 
 struct parse_options
 {
+    constexpr parse_options& set_verbose(bool val = false) { verbose = val; return *this; }
+    constexpr parse_options& set_skip_whitespace(bool val = true) { skip_whitespace = val; return *this; }
+    
     bool verbose = false;
+    bool skip_whitespace = true;
 };
 
 constexpr size_t value_stack_initial_capacity = 1 << 10;
 constexpr size_t cursor_stack_initial_capacity = 1 << 10;
 
-template<typename CursorStack, typename ValueStack, typename Context, typename ErrorStream>
+template<typename CursorStack, typename ValueStack, typename ErrorStream>
 struct parser_state
 {
     constexpr parser_state(
         CursorStack& cursor_stack,
         ValueStack& value_stack,
-        Context& context,
         ErrorStream& error_stream,
         parse_options options) :
         cursor_stack(cursor_stack),
         value_stack(value_stack),
-        context(context),
         error_stream(error_stream),
         options(options)
     {
@@ -1072,21 +1048,19 @@ struct parser_state
     CursorStack& cursor_stack;
     ValueStack& value_stack;
     ErrorStream& error_stream;
-    Context& context;
     parse_options options;
 };
 
-template<typename Root, typename Terms, typename NTerms, typename Rules, typename ContextUsage, typename MaxStatesUsage>
+template<typename Root, typename Terms, typename NTerms, typename Rules, typename MaxStatesUsage>
 struct parser
 {};
 
-template<typename RootValueType, size_t... DataSize, typename... NTermValueType, typename... Rules, typename ContextUsage, typename MaxStatesUsage>
+template<typename RootValueType, size_t... DataSize, typename... TermValueType, typename... NTermValueType, typename... Rules, typename MaxStatesUsage>
 struct parser<
     nterm<RootValueType>,
-    std::tuple<term<DataSize>...>,
+    std::tuple<term<DataSize, TermValueType>...>,
     std::tuple<nterm<NTermValueType>...>,
     std::tuple<Rules...>,
-    ContextUsage,
     MaxStatesUsage
 >
 {
@@ -1103,18 +1077,17 @@ struct parser<
     static const size_t situation_address_space_size = rule_count * situation_size * term_count;    
     static const size_t total_regex_size = (0 + ... + DataSize);
 
-    using term_tuple_type = std::tuple<term<DataSize>...>;
+    using term_tuple_type = std::tuple<term<DataSize, TermValueType>...>;
     using nterm_tuple_type = std::tuple<nterm<NTermValueType>...>;
     using rule_tuple_type = std::tuple<Rules...>;
     using root_nterm_type = nterm<RootValueType>;
-    using value_variant_type = unique_types_variant_t<char, term_value_type, NTermValueType...>;
+    using value_variant_type = unique_types_variant_t<char, std::string_view, NTermValueType...>;
     using term_subset = cbitset<term_count>;
     using nterm_subset = cbitset<nterm_count>;
     using right_side_slice_subset = cbitset<situation_size * rule_count>;
     using state = cbitset<situation_address_space_size>;
     using root_value_type = RootValueType;
-    using context_type = typename ContextUsage::type;
-
+    
     struct symbol
     {
         constexpr symbol() :
@@ -1178,17 +1151,7 @@ struct parser<
         term_tuple_type terms,
         nterm_tuple_type nterms,
         rule_tuple_type&& rules,
-        ContextUsage,
         MaxStatesUsage) :
-        parser(root, terms, nterms, std::move(rules))
-    {}
-
-    constexpr parser(
-        root_nterm_type root,
-        term_tuple_type terms,
-        nterm_tuple_type nterms,
-        rule_tuple_type&& rules,
-        ContextUsage) :
         parser(root, terms, nterms, std::move(rules))
     {}
 
@@ -1224,8 +1187,8 @@ struct parser<
         term_associativities[eof_idx] = associativity::ltor;
     }
 
-    template<size_t N>
-    constexpr void analyze_trivial_term(const term<N>& t, size16_t idx)
+    template<size_t N, typename VT>
+    constexpr void analyze_trivial_term(const term<N, VT>& t, size16_t idx)
     {
         if (t.method == term_method::exact)
             add_conflicted_term(trivial_term_table[char_to_idx(t.data[0])], idx);
@@ -1249,8 +1212,8 @@ struct parser<
         }
     }
 
-    template<size_t N>
-    constexpr void analyze_term(const term<N>& t, size16_t idx)
+    template<size_t N, typename VT>
+    constexpr void analyze_term(const term<N, VT>& t, size16_t idx)
     {
         term_names[idx] = t.get_name();
         term_ids[idx] = t.get_id();
@@ -1261,6 +1224,9 @@ struct parser<
             analyze_trivial_term(t, idx);
         else
             trivial_lexical_analyzer = false;
+        
+        if constexpr (std::is_same_v<VT, char>)
+            single_char_terms.set(idx);
     }
 
     template<typename ValueType>
@@ -1275,8 +1241,8 @@ struct parser<
         nterm_names[fake_root_idx] = fake_root<ValueType>::get_name();
     }
 
-    template<size_t N>
-    constexpr auto make_symbol(const term<N>& t) const
+    template<size_t N, typename VT>
+    constexpr auto make_symbol(const term<N, VT>& t) const
     {
         return symbol{ true, size16_t(find_str(term_ids, t.get_id())) };
     }
@@ -1714,39 +1680,33 @@ struct parser<
     }
     
     template<typename F, typename LValueType, typename... RValueType, size_t... I>
-    constexpr static LValueType reduce_value_impl(const F& f, value_variant_type* start, std::index_sequence<I...>, context_type& context)
+    constexpr static LValueType reduce_value_impl(const F& f, value_variant_type* start, std::index_sequence<I...>)
     {
-        if constexpr (std::is_same_v<context_type, no_context>)
-        {
-            if constexpr (std::is_same_v<F, std::nullptr_t>)
-                return LValueType(std::get<RValueType>(std::move(*(start + I)))...);
-            else
-                return LValueType(f(std::get<RValueType>(std::move(*(start + I)))...));
-        }
+        if constexpr (std::is_same_v<F, std::nullptr_t>)
+            return LValueType(std::get<RValueType>(std::move(*(start + I)))...);
         else
-        {
-            if constexpr (std::is_same_v<F, std::nullptr_t>)
-                return LValueType(context, std::get<RValueType>(std::move(*(start + I)))...);
-            else
-                return LValueType(f(context, std::get<RValueType>(std::move(*(start + I)))...));
-        }
+            return LValueType(f(std::get<RValueType>(std::move(*(start + I)))...));
     }
 
     template<size_t RuleIdx, typename F, typename LValueType, typename... RValueType>
-    constexpr static value_variant_type reduce_value(const rule_tuple_type& rules, value_variant_type* start, context_type& context)
+    constexpr static value_variant_type reduce_value(const rule_tuple_type& rules, value_variant_type* start)
     {
         return value_variant_type(
-            reduce_value_impl<F, LValueType, RValueType...>(std::get<RuleIdx>(rules).f, start, std::index_sequence_for<RValueType...>{}, context)
+            reduce_value_impl<F, LValueType, RValueType...>(std::get<RuleIdx>(rules).f, start, std::index_sequence_for<RValueType...>{})
         );
     }
 
     template<typename ParserState>
-    constexpr void shift(ParserState& ps, const str_view& sv, size16_t term_idx, size16_t new_cursor_value) const
+    constexpr void shift(ParserState& ps, const std::string_view& sv, size16_t term_idx, size16_t new_cursor_value) const
     {
         if (ps.options.verbose)
             ps.error_stream << "Shift to " << new_cursor_value << ", term: " << sv << "\n";
         ps.cursor_stack.push_back(new_cursor_value);
-        ps.value_stack.emplace_back(sv);
+        
+        if (single_char_terms.test(term_idx))
+            ps.value_stack.emplace_back(sv[0]);
+        else
+            ps.value_stack.emplace_back(sv);
     }
 
     template<typename ParserState>
@@ -1770,7 +1730,7 @@ struct parser<
 
         ps.cursor_stack.push_back(new_cursor_value);
         value_variant_type* start = ps.value_stack.data() + ps.value_stack.size() - ri.r_elements;
-        value_variant_type lvalue(value_reductors[ri.r_idx](rule_tuple, start, ps.context));
+        value_variant_type lvalue(value_reductors[ri.r_idx](rule_tuple, start));
         ps.value_stack.erase(ps.value_stack.end() - ri.r_elements, ps.value_stack.end());
         ps.value_stack.emplace_back(std::move(lvalue));
     }
@@ -1829,6 +1789,23 @@ struct parser<
             return get_next_term_dfa(ps, start, end);
     }
 
+    template<typename Iterator>
+    constexpr Iterator skip_whitespace(const Iterator& start, const Iterator& end) const
+    {
+        constexpr char space_chars[] = { 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x20, 0x00 };
+
+        Iterator it = start;
+        while (true)
+        {
+            if (it == end)
+                break;
+            if (find_char(*it, space_chars) == uninitialized)
+                break;
+            ++it;                            
+        }
+        return it;
+    }
+
     template<typename ParserState>
     constexpr void unexpected_char(ParserState& ps, char c) const
     {
@@ -1842,49 +1819,26 @@ struct parser<
             ps.error_stream << "Recognized " << term_names[term_idx] << " \n";
     }
 
-    template<typename Buffer, typename = std::enable_if_t<std::is_same_v<context_type, no_context>>>
+    template<typename Buffer>
     constexpr std::optional<root_value_type> parse(const Buffer& buffer) const
     {
-        no_context c;
         no_stream error_stream;
-        return parse_in_context(parse_options{}, buffer, c, error_stream);
-    }
-
-    template<typename Buffer, typename ErrorStream, typename = std::enable_if_t<std::is_same_v<context_type, no_context>>>
-    constexpr std::optional<root_value_type> parse(const Buffer& buffer, ErrorStream& error_stream) const
-    {
-        no_context c;
-        return parse_in_context(parse_options{}, buffer, c, error_stream);
-    }
-
-    template<typename Buffer, typename ErrorStream, typename = std::enable_if_t<std::is_same_v<context_type, no_context>>>
-    constexpr std::optional<root_value_type> parse(parse_options options, const Buffer& buffer, ErrorStream& error_stream) const
-    {
-        no_context c;
-        return parse_in_context(options, buffer, c, error_stream);
-    }
-
-    template<typename Buffer>
-    constexpr std::optional<root_value_type> parse_in_context(const Buffer& buffer, context_type& context) const
-    {
-        no_stream error_stream;
-        return parse_in_context(parse_options{}, buffer, context, error_stream);
-    }
-
-    template<typename Buffer>
-    constexpr std::optional<root_value_type> parse_in_context(parse_options options, const Buffer& buffer, context_type& context) const
-    {
-        no_stream error_stream;
-        return parse_in_context(options, buffer, context, error_stream);
+        return parse(parse_options{}, buffer, error_stream);
     }
 
     template<typename Buffer, typename ErrorStream>
-    constexpr std::optional<root_value_type> parse_in_context(parse_options options, const Buffer& buffer, context_type& context, ErrorStream& error_stream) const
+    constexpr std::optional<root_value_type> parse(const Buffer& buffer, ErrorStream& error_stream) const
+    {
+        return parse(parse_options{}, buffer, error_stream);
+    }
+
+    template<typename Buffer, typename ErrorStream>
+    constexpr std::optional<root_value_type> parse(parse_options options, const Buffer& buffer, ErrorStream& error_stream) const
     {
         parser_value_stack_type_t<Buffer, empty_rules_count, value_variant_type> value_stack{};
         parse_table_cursor_stack_type_t<Buffer, empty_rules_count> cursor_stack{};
         
-        parser_state ps(cursor_stack, value_stack, context, error_stream, options);
+        parser_state ps(cursor_stack, value_stack, error_stream, options);
 
         bool error = false;
         iterator_t<Buffer> it = buffer.begin();
@@ -1900,6 +1854,9 @@ struct parser<
             size16_t cursor = ps.cursor_stack.back();
             if (it == term_end)
             {
+                if (ps.options.skip_whitespace)
+                    it = skip_whitespace(it, buffer.end());
+
                 auto res = get_next_term(ps, it, buffer.end());
                 term_end = res.it;
                 term_idx = res.term_idx;
@@ -1918,7 +1875,7 @@ struct parser<
             const auto& entry = parse_table[cursor][get_parse_table_idx(true, term_idx)];
             if (entry.kind == parse_table_entry_kind::shift)
             {
-                shift(ps, buffer.view(it, term_end), term_idx, entry.shift);
+                shift(ps, buffer.get_view(it, term_end), term_idx, entry.shift);
                 it = term_end;
             }
             else if (entry.kind == parse_table_entry_kind::reduce)
@@ -1968,8 +1925,9 @@ struct parser<
     term_tuple_type term_tuple;
     nterm_tuple_type nterm_tuple;
     rule_tuple_type rule_tuple;
-    using value_reductor = value_variant_type(*)(const rule_tuple_type&, value_variant_type*, context_type&);
+    using value_reductor = value_variant_type(*)(const rule_tuple_type&, value_variant_type*);
     value_reductor value_reductors[rule_count] = {};
+    term_subset single_char_terms = {};
     using dfa_type = dfa<total_regex_size * 2>;
     dfa_type lexer_sm = {};
 };
@@ -1988,13 +1946,10 @@ struct deduce_max_states
 };
 
 template<typename Root, typename Terms, typename NTerms, typename Rules>
-parser(Root, Terms, NTerms, Rules&&) -> parser<Root, Terms, NTerms, Rules, no_context, deduce_max_states>;
+parser(Root, Terms, NTerms, Rules&&) -> parser<Root, Terms, NTerms, Rules, deduce_max_states>;
 
-template<typename Root, typename Terms, typename NTerms, typename Rules, typename ContextUsage>
-parser(Root, Terms, NTerms, Rules&&, ContextUsage) -> parser<Root, Terms, NTerms, Rules, ContextUsage, deduce_max_states>;
-
-template<typename Root, typename Terms, typename NTerms, typename Rules, typename ContextUsage, typename MaxStatesUsage>
-parser(Root, Terms, NTerms, Rules&&, ContextUsage, MaxStatesUsage) -> parser<Root, Terms, NTerms, Rules, ContextUsage, MaxStatesUsage>;
+template<typename Root, typename Terms, typename NTerms, typename Rules, typename MaxStatesUsage>
+parser(Root, Terms, NTerms, Rules&&, MaxStatesUsage) -> parser<Root, Terms, NTerms, Rules, MaxStatesUsage>;
 
 template<typename... Terms>
 constexpr auto terms(const Terms&... terms)
@@ -2035,16 +1990,16 @@ constexpr auto create_regex_parser(DFAType& sm)
         terms(regular_char, '\\', '[', ']', '^', '-', '.', '*', '?', '|', '(', ')'),
         nterms(expr, alt, concat, q_expr, primary, c_range, c_subset, c_subset_item, single_char),
         rules(
-            single_char(regular_char) >= [](str_view s) { return s[0]; },
-            single_char('\\', '\\') >= [](skip, str_view s) { return s[0]; },
-            single_char('\\', '[') >= [](skip, str_view s) { return s[0]; },
-            single_char('\\', ']') >= [](skip, str_view s) { return s[0]; },
-            single_char('\\', '^') >= [](skip, str_view s) { return s[0]; },
-            single_char('\\', '-') >= [](skip, str_view s) { return s[0]; },
-            single_char('\\', '.') >= [](skip, str_view s) { return s[0]; },
-            single_char('\\', '|') >= [](skip, str_view s) { return s[0]; },
-            single_char('\\', '(') >= [](skip, str_view s) { return s[0]; },
-            single_char('\\', ')') >= [](skip, str_view s) { return s[0]; },
+            single_char(regular_char) >= [](char c) { return c; },
+            single_char('\\', '\\') >= [](skip, char c) { return c; },
+            single_char('\\', '[') >= [](skip, char c) { return c; },
+            single_char('\\', ']') >= [](skip, char c) { return c; },
+            single_char('\\', '^') >= [](skip, char c) { return c; },
+            single_char('\\', '-') >= [](skip, char c) { return c; },
+            single_char('\\', '.') >= [](skip, char c) { return c; },
+            single_char('\\', '|') >= [](skip, char c) { return c; },
+            single_char('\\', '(') >= [](skip, char c) { return c; },
+            single_char('\\', ')') >= [](skip, char c) { return c; },
             c_range(single_char, '-', single_char) >= [](char c1, skip, char c2){ return char_range{c1, c2}; },
             c_subset_item(single_char) >= [](char c) { return char_range{ c, c}; },
             c_subset_item(c_range) >= [](char_range r){ return r; },
@@ -2064,13 +2019,12 @@ constexpr auto create_regex_parser(DFAType& sm)
             alt(alt, '|', alt) >= [&sm](slice p1, skip, slice p2) { return sm.add_alt(p1, p2); },
             expr(alt) >= [](slice p) { return p; }
         ),
-        no_context{},
         deduce_max_states{}
     );
 }
 
-template<typename DFA, size_t... N, size_t... I>
-constexpr void create_lexer_impl(DFA& sm, std::index_sequence<I...>, const std::tuple<term<N>...>& term_tuple)
+template<typename DFA, size_t... N, typename... VT, size_t... I>
+constexpr void create_lexer_impl(DFA& sm, std::index_sequence<I...>, const std::tuple<term<N, VT>...>& term_tuple)
 {
     using buffer_type = cstring_buffer<max_v<N...>>;
     
@@ -2104,8 +2058,8 @@ constexpr void create_lexer_impl(DFA& sm, std::index_sequence<I...>, const std::
     (void(single_f(std::get<I>(term_tuple), I)), ...);
 }
 
-template<typename DFA, size_t... N>
-constexpr void create_lexer(DFA& sm, const std::tuple<term<N>...>& ts)
+template<typename DFA, size_t... N, typename... VT>
+constexpr void create_lexer(DFA& sm, const std::tuple<term<N, VT>...>& ts)
 {
     create_lexer_impl(sm, std::make_index_sequence<sizeof...(N)>{}, ts);
 }

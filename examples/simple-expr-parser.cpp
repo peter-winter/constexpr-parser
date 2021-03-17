@@ -1,12 +1,12 @@
 #include "../constexpr-parser.hpp"
 #include <iostream>
-
+#include <sstream>
 
 struct binary_op
 {
-    constexpr int operator()(int x1, str_view op, int x2) const
+    constexpr int operator()(int x1, char op, int x2) const
     {
-        switch (op[0])
+        switch (op)
         {
         case '+':
             return x1 + x2;
@@ -22,13 +22,13 @@ struct binary_op
     }
 };
 
-constexpr int get_int(str_view sv)
+constexpr int get_int(const std::string_view& sv)
 {
     int sum = 0;
-    for (size_t i = 0; i < sv.size; ++i)
+    for (size_t i = 0; i < sv.size(); ++i)
     {
         sum *= 10;
-        int digit = sv.str[i] - '0';
+        int digit = sv[i] - '0';
         sum += digit;
     }
     return sum;
@@ -57,7 +57,7 @@ constexpr parser p(
     )
 );
 
-constexpr auto res_ok = p.parse(cstring_buffer("-120*2/10"));
+constexpr auto res_ok = p.parse(cstring_buffer("-120 * 2 / 10"));
 constexpr int v = res_ok.value();
 
 constexpr auto res_fail = p.parse(cstring_buffer("--"));
@@ -68,6 +68,11 @@ int main()
     std::cout << "Success case: " << v << std::endl;
     std::cout << "Fail case: " << b << std::endl;
 
+    std::stringstream ss;
+    auto res = p.parse(parse_options{}.set_verbose(true), string_buffer("2 + 2 * 2"), ss);
+    int rv = res.value();
+    std::cout << "Runtime case: " << rv << std::endl;
+    std::cout << "Verbose output: " << std::endl << ss.str();
     return 0;
 }
 
