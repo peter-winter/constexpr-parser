@@ -785,12 +785,40 @@ namespace lexer
         size16_t term_idx;
     };
 
-    template<size_t MaxStates>
-    class dfa
+    template<size_t N>
+    using dfa = stdex::cvector<dfa_state, N>;
+
+    class dfa_size_analyzer
     {
     public:
         using slice = utils::slice;
-        using dfa_state_container_type = stdex::cvector<dfa_state, MaxStates>;
+        
+        constexpr slice prim_char(char) { return prim(); }
+        constexpr slice prim_subset(char_subset&&) { return prim(); }
+        constexpr slice prim_subset_flip(char_subset&&) { return prim(); }
+        constexpr slice prim_any() { return prim(); }
+        constexpr slice star(slice s) { return s; }
+        constexpr slice plus(slice s) { return s; }
+        constexpr slice opt(slice s) { return s; }
+        constexpr slice cat(slice s1, slice s2) { return add(s1, s2); }
+        constexpr slice alt(slice s1, slice s2) { return add(s1, s2); }
+
+    private:
+        constexpr slice prim() { auto old = size; size += 2; return slice{ old, 2 }; }
+        constexpr slice add(slice s1, slice s2) { return slice{ s1.start, s1.n + s2.n }; }
+
+        size32_t size = 0;
+    };
+
+    template<size_t N>
+    class dfa_builder
+    {
+    public:
+        constexpr dfa_builder(dfa<N>& sm):
+            sm(sm)
+        {}
+        
+        using slice = utils::slice;
         
         constexpr slice prim_char(char c)
         {
@@ -799,16 +827,16 @@ namespace lexer
 
         constexpr slice prim_subset(char_subset&& s)
         {
-            size_t old_size = states.size();
-            states.push_back(dfa_state());
-            states.back().start_state = 1;
+            size_t old_size = sm.size();
+            sm.push_back(dfa_state());
+            sm.back().start_state = 1;
             for (size_t i = 0; i < s.size(); ++i)
                 if (s.test(i))
                 {
-                    states.back().transitions[i] = size16_t(states.size());
+                    sm.back().transitions[i] = size16_t(sm.size());
                 }
-            states.push_back(dfa_state());
-            states.back().end_state = 1;
+            sm.push_back(dfa_state());
+            sm.back().end_state = 1;
             return slice{ size32_t(old_size), 2 };
         }
 
@@ -825,10 +853,10 @@ namespace lexer
         constexpr slice star(slice s)
         {
             size_t b = s.start;
-            states[b].end_state = 1;
+            sm[b].end_state = 1;
             for (size_t i = s.start; i < s.start + s.n; ++i)
             {
-                if (states[i].end_state)
+                if (sm[i].end_state)
                     merge(i, b);
             }
             return s;
@@ -839,7 +867,7 @@ namespace lexer
             size_t b = s.start;
             for (size_t i = s.start; i < s.start + s.n; ++i)
             {
-                if (states[i].end_state)
+                if (sm[i].end_state)
                     merge(i, b, true);
             }
             return s;
@@ -847,7 +875,7 @@ namespace lexer
 
         constexpr slice opt(slice s)
         {
-            states[s.start].end_state = 1;
+            sm[s.start].end_state = 1;
             return s;
         }    
 
@@ -856,7 +884,7 @@ namespace lexer
             size_t b = s2.start;
             for (size_t i = s1.start; i < s1.start + s1.n; ++i)
             {
-                if (states[i].end_state)
+                if (sm[i].end_state)
                     merge(i, b, false, true);
             }
             return slice{ s1.start, s1.n + s2.n };
@@ -874,69 +902,18 @@ namespace lexer
         {
             for (size_t i = s.start; i < s.start + s.n; ++i)
             {
-                mark_end_state(states[i], idx);
+                mark_end_state(sm[i], idx);
             }
         }
 
-        constexpr size_t size() const { return states.size(); }
-
-        template<typename Stream, size_t N>
-        constexpr void write_diag_str(Stream& s, const str_table<N>& term_names) const
-        {
-            for (size_t i = 0; i < states.size(); ++i)
-            {
-                write_state_diag_str(states[i], s, i, term_names);
-            }
-        }
-
-        template<typename Iterator, typename ParserState>
-        constexpr auto recognize(const Iterator& start, const Iterator& end, ParserState& ps) const
-        {
-            size16_t state_idx = 0;
-            Iterator it = start;
-            recognized_term<Iterator> rt{ end, uninitialized16 };
-            while (true)
-            {
-                const dfa_state& state = states[state_idx];
-                size16_t rec_idx = state.conflicted_recognition[0];
-                if (rec_idx != uninitialized16)
-                {
-                    rt.it = it;
-                    rt.term_idx = rec_idx;
-
-                    if (ps.options.verbose)
-                    {
-                        ps.error_stream << ps.current_sp << "REGEX MATCH: Recognized " << rec_idx << "\n";
-                    }
-                }
-                
-                if (it == end)
-                    break;
-                
-                size16_t tr = state.transitions[utils::char_to_idx(*it)];
-                if (tr == uninitialized16)
-                    break;
-
-                state_idx = tr;
-
-                if (ps.options.verbose)
-                {
-                    ps.error_stream << ps.current_sp << "REGEX MATCH: Current char " << *it << "\n";
-                    ps.error_stream << ps.current_sp << "REGEX MATCH: New state " << state_idx << "\n";
-                }
-
-                ++it;
-            }
-            return rt;
-        }
-
+        constexpr size_t size() const { return sm.size(); }
     private:
         constexpr void merge(size_t to, size_t from, bool keep_end_state = false, bool mark_from_as_unreachable = false)
         {
             if (to == from)
                 return;
-            dfa_state& s_from = states[from];
-            dfa_state& s_to = states[to];
+            dfa_state& s_from = sm[from];
+            dfa_state& s_to = sm[to];
             s_from.start_state = 0;
             if (keep_end_state)
                 s_to.end_state = s_to.end_state || s_from.end_state;
@@ -960,7 +937,7 @@ namespace lexer
             {
                 size_t term_idx = cr[j];
                 if (term_idx != uninitialized16)
-                    mark_end_state(states[to], term_idx);
+                    mark_end_state(sm[to], term_idx);
                 else
                     break;
             }
@@ -975,100 +952,32 @@ namespace lexer
             add_conflicted_term(s.conflicted_recognition, idx);
         }
 
-        template<typename Stream, size_t N>
-        constexpr void write_state_diag_str(const dfa_state& st, Stream& s, size16_t idx, const str_table<N>& term_names) const
-        {
-            s << "STATE " << idx;
-            if (st.unreachable)
-            {
-                s << " (unreachable) \n";
-                return;
-            }
-
-            if (st.end_state)
-                s << " recognized ";
-            size16_t term_idx = st.conflicted_recognition[0];
-            if (term_idx != uninitialized16)
-                s << term_names[term_idx];
-            s << "   ";
-
-            auto f_range = [&s](const auto& r, size16_t state_idx)
-            {
-                if (r.size() > 2)
-                {
-                    s << "[";
-                    s << utils::c_names.name(r.front());
-                    s << " - ";
-                    s << utils::c_names.name(r.back());
-                    s << "] -> " << state_idx << "  ";
-                }
-                else
-                {
-                    for (char c : r)
-                    {
-                        s << utils::c_names.name(c);
-                        s << " -> " << state_idx << "  ";
-                    }
-                }
-            };
-
-            stdex::cvector<char, dfa_state::transitions_size> tmp;
-            size16_t prev = uninitialized16;
-            for (size_t i = 0; i < dfa_state::transitions_size + 1; ++i)
-            {       
-                size16_t to = (i == dfa_state::transitions_size ? uninitialized16 : st.transitions[i]);
-                if (to == prev && to != uninitialized16)
-                    tmp.push_back(utils::idx_to_char(i));
-                else 
-                {
-                    if (prev != uninitialized16)
-                    {
-                        f_range(tmp, prev);
-                        tmp.clear();
-                    }
-                    if (to != uninitialized16)
-                        tmp.push_back(utils::idx_to_char(i));
-                }
-                prev = to;
-            }
-            s << "\n";
-        }
-
-        dfa_state_container_type states = {};
+        dfa<N>& sm;
     };
 
-    template<typename DFA, typename... Terms>
-    constexpr void create_lexer(DFA& sm, const std::tuple<Terms...>& ts)
+    template<size_t N, typename Parser>
+    constexpr bool add_term_to_dfa(detail::regex_regular_char, dfa_builder<N>& b, const Parser&, size_t idx)
     {
-        create_lexer_impl(sm, std::index_sequence_for<Terms...>{}, ts);
-    }
-
-    template<typename DFAType>
-    constexpr auto create_regex_parser(DFAType& sm);
-
-    template<typename DFA, typename Parser>
-    constexpr bool add_term_to_lexer(detail::regex_regular_char, DFA& sm, const Parser&, size_t idx)
-    {
-        utils::slice prev{0, size32_t(sm.size())};
-        utils::slice new_sl = sm.prim_subset_flip(
+        utils::slice prev{0, size32_t(b.size())};
+        utils::slice new_sl = b.prim_subset_flip(
             char_subset(detail::regex_regular_char::get_data())
         );
-        sm.mark_end_states(new_sl, idx);
-        sm.alt(prev, new_sl);
+        b.mark_end_states(new_sl, idx);
+        b.alt(prev, new_sl);
         return true;
     }
 
-    template<typename DFA, typename VT, size_t N, typename Parser>
-    constexpr void add_term_to_lexer(const term<N, VT>& t, DFA& sm, const Parser& p, size_t idx)
+    template<size_t N, typename VT, size_t DataSize, typename Parser>
+    constexpr void add_term_to_dfa(const term<DataSize, VT>& t, dfa_builder<N>& b, const Parser& p, size_t idx)
     {
         using slice = utils::slice;
 
-        slice prev{0, size32_t(sm.size())};
+        slice prev{0, size32_t(b.size())};
         if (t.is_trivial())
         {
-            slice new_sl = sm.prim_char(t.get_data()[0]);
-            sm.mark_end_states(new_sl, idx);
-            sm.alt(prev, new_sl);
+            slice new_sl = b.prim_char(t.get_data()[0]);
+            b.mark_end_states(new_sl, idx);
+            b.alt(prev, new_sl);
         }
         else
         {
@@ -1076,19 +985,138 @@ namespace lexer
                 
             if (res.has_value())
             {
-                sm.mark_end_states(res.value(), idx);
-                sm.alt(prev, res.value());
+                b.mark_end_states(res.value(), idx);
+                b.alt(prev, res.value());
             }
             else
                 throw std::runtime_error("Regex parse error");
         }
     }
 
-    template<typename DFA, typename... Terms, size_t... I>
-    constexpr void create_lexer_impl(DFA& sm, std::index_sequence<I...>, const std::tuple<Terms...>& term_tuple)
+    template<typename Builder>
+    constexpr auto create_regex_parser(Builder& b);
+
+    template<size_t N, typename... Terms>
+    constexpr void create_lexer(dfa<N>& sm, const std::tuple<Terms...>& ts)
+    {
+        create_lexer_impl(sm, std::index_sequence_for<Terms...>{}, ts);
+    }
+
+    template<size_t N, typename... Terms, size_t... I>
+    constexpr void create_lexer_impl(dfa<N>& sm, std::index_sequence<I...>, const std::tuple<Terms...>& term_tuple)
     {        
-        auto p = create_regex_parser(sm);
-        (void(add_term_to_lexer(std::get<I>(term_tuple), sm, p, I)), ...);
+        dfa_builder<N> b(sm);
+        auto p = create_regex_parser(b);
+        (void(add_term_to_dfa(std::get<I>(term_tuple), b, p, I)), ...);
+    }
+
+    template<size_t N, typename Iterator, typename ParserState>
+    constexpr auto recognize(const dfa<N>& sm, const Iterator& start, const Iterator& end, ParserState& ps)
+    {
+        size16_t state_idx = 0;
+        Iterator it = start;
+        recognized_term<Iterator> rt{ end, uninitialized16 };
+        while (true)
+        {
+            const dfa_state& state = sm[state_idx];
+            size16_t rec_idx = state.conflicted_recognition[0];
+            if (rec_idx != uninitialized16)
+            {
+                rt.it = it;
+                rt.term_idx = rec_idx;
+
+                if (ps.options.verbose)
+                {
+                    ps.error_stream << ps.current_sp << "REGEX MATCH: Recognized " << rec_idx << "\n";
+                }
+            }
+            
+            if (it == end)
+                break;
+            
+            size16_t tr = state.transitions[utils::char_to_idx(*it)];
+            if (tr == uninitialized16)
+                break;
+
+            state_idx = tr;
+
+            if (ps.options.verbose)
+            {
+                ps.error_stream << ps.current_sp << "REGEX MATCH: Current char " << *it << "\n";
+                ps.error_stream << ps.current_sp << "REGEX MATCH: New state " << state_idx << "\n";
+            }
+
+            ++it;
+        }
+        return rt;
+    }
+
+    template<typename Stream, typename StrTable>
+    constexpr void write_state_diag_str(const dfa_state& st, Stream& s, size16_t idx, const StrTable& term_names)
+    {
+        s << "STATE " << idx;
+        if (st.unreachable)
+        {
+            s << " (unreachable) \n";
+            return;
+        }
+
+        if (st.end_state)
+            s << " recognized ";
+        size16_t term_idx = st.conflicted_recognition[0];
+        if (term_idx != uninitialized16)
+            s << term_names[term_idx];
+        s << "   ";
+
+        auto f_range = [&s](const auto& r, size16_t state_idx)
+        {
+            if (r.size() > 2)
+            {
+                s << "[";
+                s << utils::c_names.name(r.front());
+                s << " - ";
+                s << utils::c_names.name(r.back());
+                s << "] -> " << state_idx << "  ";
+            }
+            else
+            {
+                for (char c : r)
+                {
+                    s << utils::c_names.name(c);
+                    s << " -> " << state_idx << "  ";
+                }
+            }
+        };
+
+        stdex::cvector<char, dfa_state::transitions_size> tmp;
+        size16_t prev = uninitialized16;
+        for (size_t i = 0; i < dfa_state::transitions_size + 1; ++i)
+        {       
+            size16_t to = (i == dfa_state::transitions_size ? uninitialized16 : st.transitions[i]);
+            if (to == prev && to != uninitialized16)
+                tmp.push_back(utils::idx_to_char(i));
+            else 
+            {
+                if (prev != uninitialized16)
+                {
+                    f_range(tmp, prev);
+                    tmp.clear();
+                }
+                if (to != uninitialized16)
+                    tmp.push_back(utils::idx_to_char(i));
+            }
+            prev = to;
+        }
+        s << "\n";
+    }
+
+    template<size_t N, typename Stream, typename StrTable>
+    constexpr void write_diag_str(const dfa<N>& sm, Stream& s, const StrTable& term_names)
+    {
+        for (size_t i = 0; i < sm.size(); ++i)
+        {
+            write_state_diag_str(sm[i], s, i, term_names);
+        }
     }
 }
 
@@ -1992,7 +2020,7 @@ private:
     template<typename ParserState, typename Iterator>
     constexpr auto get_next_term_dfa(ParserState& ps, const Iterator& start, const Iterator& end) const
     {
-        return lexer_sm.recognize(start, end, ps);
+        return lexer::recognize(lexer_sm, start, end, ps);
     }
 
     template<typename ParserState, typename Iterator>
@@ -2192,10 +2220,9 @@ namespace ftors
 
 namespace lexer
 {
-    template<typename DFAType>
-    constexpr auto create_regex_parser(DFAType& sm)
+    template<typename Builder>
+    constexpr auto create_regex_parser(Builder& b)
     {
-        using dfa_type = DFAType;
         using slice = utils::slice;
         using namespace ftors;
         
@@ -2232,19 +2259,19 @@ namespace lexer
                 c_subset_item(c_range),
                 c_subset(c_subset_item) >= [](char_range r){ return char_subset(r); },
                 c_subset(c_subset_item, c_subset) >= [](char_range r, char_subset&& s){ return s.add_range(r); },
-                primary(single_char) >= [&sm](char c) { return sm.prim_char(c); },
-                primary('.') >= [&sm](skip) { return sm.prim_any(); },
-                primary('[', c_subset, ']') >= [&sm](skip, char_subset&& s, skip) { return sm.prim_subset(std::move(s)); },
-                primary('[', '^', c_subset, ']') >= [&sm](skip, skip, char_subset&& s, skip) { return sm.prim_subset_flip(std::move(s)); },
+                primary(single_char) >= [&b](char c) { return b.prim_char(c); },
+                primary('.') >= [&b](skip) { return b.prim_any(); },
+                primary('[', c_subset, ']') >= [&b](skip, char_subset&& s, skip) { return b.prim_subset(std::move(s)); },
+                primary('[', '^', c_subset, ']') >= [&b](skip, skip, char_subset&& s, skip) { return b.prim_subset_flip(std::move(s)); },
                 primary('(', expr, ')') >= _e2,
                 q_expr(primary),
-                q_expr(primary, '*') >= [&sm](slice p, skip) { return sm.star(p); },
-                q_expr(primary, '+') >= [&sm](slice p, skip) { return sm.plus(p); },
-                q_expr(primary, '?') >= [&sm](slice p, skip) { return sm.opt(p); },
+                q_expr(primary, '*') >= [&b](slice p, skip) { return b.star(p); },
+                q_expr(primary, '+') >= [&b](slice p, skip) { return b.plus(p); },
+                q_expr(primary, '?') >= [&b](slice p, skip) { return b.opt(p); },
                 concat(q_expr),
-                concat(q_expr, concat) >= [&sm](slice p1, slice p2) { return sm.cat(p1, p2); },
+                concat(q_expr, concat) >= [&b](slice p1, slice p2) { return b.cat(p1, p2); },
                 alt(concat),
-                alt(alt, '|', alt) >= [&sm](slice p1, skip, slice p2) { return sm.alt(p1, p2); },
+                alt(alt, '|', alt) >= [&b](slice p1, skip, slice p2) { return b.alt(p1, p2); },
                 expr(alt)
             ),
             deduce_max_states{}

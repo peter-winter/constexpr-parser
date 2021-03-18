@@ -8,15 +8,29 @@ using namespace ctpg::buffers;
 using namespace ctpg::lexer;
 
 template<size_t N>
+constexpr static size32_t analyze_dfa_size(const char (&pattern)[N])
+{
+    dfa_size_analyzer a;
+    auto p = create_regex_parser(a);
+    auto res = p.parse(cstring_buffer(pattern));
+    if (!res.has_value())
+        throw std::runtime_error("invalid regex");
+    return res.value().n;
+}
+
+template<auto& Pattern>
 struct regex
 {
-    constexpr regex(const char(&str)[N])
+    static const size32_t dfa_size = analyze_dfa_size(Pattern);
+
+    constexpr regex()
     {
-        auto p = create_regex_parser(sm);
-        auto s = p.parse(cstring_buffer(str));
+        dfa_builder<dfa_size> b(sm);
+        auto p = create_regex_parser(b);
+        auto s = p.parse(cstring_buffer(Pattern));
         if (!s.has_value())
             throw std::runtime_error("invalid regex");
-        sm.mark_end_states(s.value(), 0);
+        b.mark_end_states(s.value(), 0);
     }
 
     struct simple_state
@@ -34,23 +48,22 @@ struct regex
     {
         simple_state ss;
         ctpg::buffers::cstring_buffer buf(str);
-        auto res = sm.recognize(buf.begin(), buf.end(), ss);
+        auto res = recognize(sm, buf.begin(), buf.end(), ss);
         return res.term_idx == 0 && res.it == buf.end();
     }
     
-    ctpg::lexer::dfa<N * 2> sm;
+    ctpg::lexer::dfa<dfa_size> sm;
 };
 
-template<size_t N>
-regex(const char (&)[N]) -> regex<N>;
+constexpr char pattern[] = "[1-9]+";
+constexpr regex<pattern> r;
 
-constexpr regex r("[1-9]+");
 constexpr bool m = r.match("123");
 
 int main()
 {
     ctpg::str_table<1> tn = {""};
-    r.sm.write_diag_str(std::cout, tn);
+    lexer::write_diag_str(r.sm, std::cout, tn);
     std::cout << (m ? "Matched" : "Fail") << std::endl;
     return 0;
 }
