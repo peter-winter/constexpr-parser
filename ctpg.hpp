@@ -482,47 +482,7 @@ private:
     const char* name;
 };
 
-template<size_t N>
-class exclude
-{
-public:
-    template<size_t N1>
-    constexpr exclude(const char(&source)[N1])
-    {
-        utils::copy_array(data, source, std::make_index_sequence<N1>{});
-    }
-
-    constexpr const auto& get_data() const { return data; }
-
-private:
-    char data[N] = {};
-};
-
-template<size_t N>
-exclude(const char(&)[N])->exclude<N>;
-
-template<size_t N>
-class include
-{
-public:
-    template<size_t N1>
-    constexpr include(const char(&source)[N1])
-    {
-        copy_array(data, source, std::make_index_sequence<N1>{});
-    }
-
-    constexpr const auto& get_data() const { return data; }
-
-private:
-    char data[N] = {};
-};
-
-template<size_t N>
-include(const char(&)[N])->include<N>;
-
 enum class associativity { ltor, rtol };
-
-enum class term_method { exact, exclude, include, regex };
 
 struct source_point
 {
@@ -561,12 +521,11 @@ class term
 {
 public:
     using value_type = term_value<ValueType>;
-
     static const size_t data_size = DataSize;
 
     constexpr term(char c, int precedence = 0, associativity a = associativity::ltor) :
         precedence(precedence), ass(a),  
-        method(term_method::exact)
+        trivial(true)
     {
         data[0] = c;
         utils::copy_array(id, utils::c_names.name(c), std::make_index_sequence<utils::char_names::name_size>{});
@@ -575,7 +534,7 @@ public:
     template<size_t N>
     constexpr term(const char (&source)[N], const char *custom_name, int precedence = 0, associativity a = associativity::ltor) :
         precedence(precedence), ass(a),  
-        method(term_method::regex),
+        trivial(false),
         custom_name(custom_name)
     {
         utils::copy_array(data, source, std::make_index_sequence<N>{});
@@ -587,7 +546,7 @@ public:
     template<size_t N>
     constexpr term(const char (&source)[N], int precedence = 0, associativity a = associativity::ltor) :
         precedence(precedence), ass(a),  
-        method(term_method::regex)
+        trivial(false)
     {
         utils::copy_array(data, source, std::make_index_sequence<N>{});
         id[0] = 'r';
@@ -595,39 +554,16 @@ public:
         utils::copy_array(&id[2], source, std::make_index_sequence<N>{});
     }
 
-    template<size_t N>
-    constexpr term(exclude<N> ex, const char *custom_name, int precedence = 0, associativity a = associativity::ltor) :
-        custom_name(custom_name), precedence(precedence), ass(a), 
-        method(term_method::exclude)
-    {
-        utils::copy_array(data, ex.get_data(), std::make_index_sequence<N>{});
-        id[0] = 'e';
-        id[1] = '_';
-        utils::copy_array(&id[2], ex.get_data(), std::make_index_sequence<N>{});
-    }
-
-    template<size_t N>
-    constexpr term(include<N> in, const char *custom_name, int precedence = 0, associativity a = associativity::ltor) :
-        custom_name(custom_name), precedence(precedence), ass(a), 
-        method(term_method::include)
-    {
-        utils::copy_array(data, in.get_data(), std::make_index_sequence<N>{});
-        id[0] = 'i';
-        id[1] = '_';
-        utils::copy_array(&id[2], in.get_data(), std::make_index_sequence<N>{});
-    }
-    
     constexpr const char* get_name() const { return custom_name ? custom_name : id; }
     constexpr const char* get_id() const { return id; }
 
     constexpr bool is_trivial() const 
     { 
-        return method != term_method::regex;
+        return trivial;
     }
 
     constexpr associativity get_associativity() const { return ass; }
     constexpr int get_precedence() const { return precedence; }
-    constexpr term_method get_method() const { return method; }
     constexpr auto& get_data() const { return data; }
 
 private:
@@ -636,7 +572,7 @@ private:
     associativity ass;
     char id[data_size + 10] = {};
     const char* custom_name = nullptr;
-    term_method method;
+    bool trivial = false;
 };
 
 term(char c, int = 0, associativity = associativity::ltor) -> term<1, char>;
@@ -647,15 +583,29 @@ term(const char (&)[N], int = 0, associativity = associativity::ltor) -> term<N,
 template<size_t N>
 term(const char (&)[N], const char *, int = 0, associativity = associativity::ltor) -> term<N, std::string_view>;
 
-template<size_t N>
-term(exclude<N>, const char *, int = 0, associativity = associativity::ltor) -> term<N, char>;
-
-template<size_t N>
-term(include<N>, const char *, int = 0, associativity = associativity::ltor) -> term<N, char>;
-
-
 namespace detail
 {
+    template<typename Arg>
+    constexpr auto make_term(const Arg& arg)
+    {
+        return term(arg);
+    }
+
+    class regex_regular_char
+    {
+    public:
+        using value_type = term_value<char>;
+
+        static const size_t data_size = 1;
+        constexpr static const auto& get_data() { return "\\[]^-.*+?|()"; }
+        constexpr static const auto& get_id() { return "$regex_regular$"; }
+    };
+
+    constexpr auto make_term(regex_regular_char)
+    {
+        return detail::regex_regular_char{};
+    }
+
     template<typename ValueType>
     struct fake_root
     {
@@ -722,6 +672,11 @@ namespace detail
     constexpr auto make_rule_item(Arg&& arg)
     {
         return term(arg);
+    }
+
+    constexpr auto make_rule_item(regex_regular_char)
+    {
+        return regex_regular_char{};
     }
 
     template<typename ValueType>
@@ -1082,56 +1037,58 @@ namespace lexer
         dfa_state_container_type states = {};
     };
 
-    template<typename DFA, size_t... N, typename... VT>
-    constexpr void create_lexer(DFA& sm, const std::tuple<term<N, VT>...>& ts)
+    template<typename DFA, typename... Terms>
+    constexpr void create_lexer(DFA& sm, const std::tuple<Terms...>& ts)
     {
-        create_lexer_impl(sm, std::make_index_sequence<sizeof...(N)>{}, ts);
+        create_lexer_impl(sm, std::index_sequence_for<Terms...>{}, ts);
     }
 
     template<typename DFAType>
     constexpr auto create_regex_parser(DFAType& sm);
 
-    template<typename DFA, size_t... N, typename... VT, size_t... I>
-    constexpr void create_lexer_impl(DFA& sm, std::index_sequence<I...>, const std::tuple<term<N, VT>...>& term_tuple)
+    template<typename DFA, typename Parser>
+    constexpr bool add_term_to_lexer(detail::regex_regular_char, DFA& sm, const Parser&, size_t idx)
     {
-        using buffer_type = buffers::cstring_buffer<meta::max_v<N...>>;
-        using slice = utils::slice;
-        
-        auto p = create_regex_parser(sm);
-        auto single_f = [&p, &sm](const auto& t, size_t idx)
-        { 
-            slice prev{0, size32_t(sm.size())};
+        utils::slice prev{0, size32_t(sm.size())};
+        utils::slice new_sl = sm.prim_subset_flip(
+            char_subset(detail::regex_regular_char::get_data())
+        );
+        sm.mark_end_states(new_sl, idx);
+        sm.alt(prev, new_sl);
+        return true;
+    }
 
-            if (t.is_trivial())
-            {
-                slice new_sl{};
-                if (t.get_method() == term_method::exact)
-                    new_sl = sm.prim_char(t.get_data()[0]);
-                else if (t.get_method() == term_method::include)
-                    new_sl = sm.prim_subset(char_subset(t.get_data()));
-                else if (t.get_method() == term_method::exclude)
-                    new_sl = sm.prim_subset_flip(char_subset(t.get_data()));
+    template<typename DFA, typename VT, size_t N, typename Parser>
+    constexpr void add_term_to_lexer(const term<N, VT>& t, DFA& sm, const Parser& p, size_t idx)
+    {
+        using slice = utils::slice;
+
+        slice prev{0, size32_t(sm.size())};
+        if (t.is_trivial())
+        {
+            slice new_sl = sm.prim_char(t.get_data()[0]);
+            sm.mark_end_states(new_sl, idx);
+            sm.alt(prev, new_sl);
+        }
+        else
+        {
+            std::optional<slice> res = p.parse(buffers::cstring_buffer(t.get_data()));
                 
-                sm.mark_end_states(new_sl, idx);
-                sm.alt(prev, new_sl);
-                return true;
+            if (res.has_value())
+            {
+                sm.mark_end_states(res.value(), idx);
+                sm.alt(prev, res.value());
             }
             else
-            {
-                std::optional<slice> res = p.parse(buffer_type(t.get_data()));
-                    
-                if (res.has_value())
-                {
-                    sm.mark_end_states(res.value(), idx);
-                    sm.alt(prev, res.value());
-                    return true;
-                }
-                else
-                    throw std::runtime_error("Regex parse error");
-            }
-        };
+                throw std::runtime_error("Regex parse error");
+        }
+    }
 
-        (void(single_f(std::get<I>(term_tuple), I)), ...);
+    template<typename DFA, typename... Terms, size_t... I>
+    constexpr void create_lexer_impl(DFA& sm, std::index_sequence<I...>, const std::tuple<Terms...>& term_tuple)
+    {        
+        auto p = create_regex_parser(sm);
+        (void(add_term_to_lexer(std::get<I>(term_tuple), sm, p, I)), ...);
     }
 }
 
@@ -1231,16 +1188,16 @@ template<typename Root, typename Terms, typename NTerms, typename Rules, typenam
 class parser
 {};
 
-template<typename RootValueType, size_t... DataSize, typename... TermValueType, typename... NTermValueType, typename... Rules, typename MaxStatesUsage>
+template<typename RootValueType, typename... Terms, typename... NTermValueType, typename... Rules, typename MaxStatesUsage>
 class parser<
     nterm<RootValueType>,
-    std::tuple<term<DataSize, TermValueType>...>,
+    std::tuple<Terms...>,
     std::tuple<nterm<NTermValueType>...>,
     std::tuple<Rules...>,
     MaxStatesUsage
 >
 {
-    using term_tuple_type = std::tuple<term<DataSize, TermValueType>...>;
+    using term_tuple_type = std::tuple<Terms...>;
     using nterm_tuple_type = std::tuple<nterm<NTermValueType>...>;
     using rule_tuple_type = std::tuple<Rules...>;
     using root_nterm_type = nterm<RootValueType>;
@@ -1385,10 +1342,10 @@ public:
     }
 
 private:
-    static const size_t max_states = MaxStatesUsage::template value<sizeof...(DataSize), Rules::n...>;
+    static const size_t max_states = MaxStatesUsage::template value<sizeof...(Terms), Rules::n...>;
     static const size_t max_rule_element_count = meta::max_v<1, Rules::n...>;
-    static const size_t term_count = sizeof...(DataSize) + 1;
-    static const size16_t eof_idx = sizeof...(DataSize);
+    static const size_t term_count = sizeof...(Terms) + 1;
+    static const size16_t eof_idx = sizeof...(Terms);
     static const size_t nterm_count = sizeof...(NTermValueType) + 1;
     static const size16_t fake_root_idx = sizeof...(NTermValueType);
     static const size_t rule_count = sizeof...(Rules) + 1;
@@ -1396,7 +1353,7 @@ private:
     static const size_t empty_rules_count = meta::count_zeros<Rules::n...>;
     static const size_t situation_size = max_rule_element_count + 1;
     static const size_t situation_address_space_size = rule_count * situation_size * term_count;    
-    static const size_t total_regex_size = (0 + ... + DataSize);
+    static const size_t total_regex_size = (0 + ... + Terms::data_size);
 
     using value_variant_type = meta::unique_types_variant_t<
         std::nullptr_t,
@@ -1475,28 +1432,18 @@ private:
         term_associativities[eof_idx] = associativity::ltor;
     }
 
-    template<size_t N, typename VT>
-    constexpr void analyze_trivial_term(const term<N, VT>& t, size16_t idx)
+    constexpr void analyze_term(detail::regex_regular_char t, size16_t idx)
     {
-        if (t.get_method() == term_method::exact)
-            lexer::add_conflicted_term(trivial_term_table[utils::char_to_idx(t.get_data()[0])], idx);
-        else if (t.get_method() == term_method::exclude)
+        term_names[idx] = term_ids[idx] = detail::regex_regular_char::get_id();
+        term_precedences[idx] = 0;
+        term_associativities[idx] = associativity::ltor;
+        single_char_terms.set(idx);
+        
+        for (size_t i = 0; i < std::size(trivial_term_table); ++i)
         {
-            for (size_t i = 0; i < std::size(trivial_term_table); ++i)
-            {
-                size_t idx_found = utils::find_char(utils::idx_to_char(i), t.get_data());
-                if (idx_found == uninitialized)
-                    lexer::add_conflicted_term(trivial_term_table[i], idx);
-            }
-        }
-        else if (t.get_method() == term_method::include)
-        {
-            const char* data = t.get_data();
-            while (*data)
-            {
-                lexer::add_conflicted_term(trivial_term_table[*data], idx);
-                ++data;
-            }                
+            size_t idx_found = utils::find_char(utils::idx_to_char(i), t.get_data());
+            if (idx_found == uninitialized)
+                lexer::add_conflicted_term(trivial_term_table[i], idx);
         }
     }
 
@@ -1508,13 +1455,13 @@ private:
         term_precedences[idx] = t.get_precedence();
         term_associativities[idx] = t.get_associativity();
 
-        if (trivial_lexical_analyzer && t.is_trivial())
-            analyze_trivial_term(t, idx);
+        if (t.is_trivial())
+        {
+            lexer::add_conflicted_term(trivial_term_table[utils::char_to_idx(t.get_data()[0])], idx);
+            single_char_terms.set(idx);
+        }
         else
             trivial_lexical_analyzer = false;
-        
-        if constexpr (std::is_same_v<VT, char>)
-            single_char_terms.set(idx);
     }
 
     template<typename ValueType>
@@ -1533,6 +1480,11 @@ private:
     constexpr auto make_symbol(const term<N, VT>& t) const
     {
         return symbol{ true, size16_t(utils::find_str(term_ids, t.get_id())) };
+    }
+
+    constexpr auto make_symbol(detail::regex_regular_char) const
+    {
+        return symbol{ true, size16_t(utils::find_str(term_ids, detail::regex_regular_char::get_id())) };
     }
 
     template<typename ValueType>
@@ -2161,7 +2113,7 @@ parser(Root, Terms, NTerms, Rules&&, MaxStatesUsage) -> parser<Root, Terms, NTer
 template<typename... Terms>
 constexpr auto terms(const Terms&... terms)
 {
-    return std::make_tuple(term(terms)...);
+    return std::make_tuple(detail::make_term(terms)...);
 }
 
 template<typename... NTerms>
@@ -2235,8 +2187,7 @@ namespace ftors
     };
 
     template<typename T>
-    ret(T&&) -> ret<std::decay_t<T>>;
-    
+    ret(T&&) -> ret<std::decay_t<T>>;    
 }
 
 namespace lexer
@@ -2248,7 +2199,6 @@ namespace lexer
         using slice = utils::slice;
         using namespace ftors;
         
-        constexpr term regular_char(exclude("\\[]^-.*+?|()"), "regular", 0, associativity::ltor);
         constexpr nterm<slice> expr("expr");
         constexpr nterm<slice> alt("alt");
         constexpr nterm<slice> concat("concat");
@@ -2261,10 +2211,10 @@ namespace lexer
 
         return parser(
             expr,
-            terms(regular_char, '\\', '[', ']', '^', '-', '.', '*', '+', '?', '|', '(', ')'),
+            terms(detail::regex_regular_char{}, '\\', '[', ']', '^', '-', '.', '*', '+', '?', '|', '(', ')'),
             nterms(expr, alt, concat, q_expr, primary, c_range, c_subset, c_subset_item, single_char),
             rules(
-                single_char(regular_char),
+                single_char(detail::regex_regular_char{}),
                 single_char('\\', '\\') >= _e2,
                 single_char('\\', '[') >= _e2,
                 single_char('\\', ']') >= _e2,
