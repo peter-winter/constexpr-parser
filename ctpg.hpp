@@ -790,7 +790,38 @@ namespace lexer
         char end;
     };
 
-    using char_subset = stdex::cbitset<meta::distinct_values_count<char>>;
+    class char_subset
+    {
+    public:
+        constexpr char_subset() = default;
+
+        template<size_t N>
+        constexpr char_subset(const char (&str)[N])
+        {
+            for (char c : str)
+                data.set(utils::char_to_idx(c));
+        }
+
+        constexpr char_subset(char_range r)
+        {
+            add_range(r);
+        }
+
+        constexpr char_subset& add_range(char_range r)
+        {
+            for (size_t i = utils::char_to_idx(r.start); i <= utils::char_to_idx(r.end); ++i)
+                data.set(i);
+            return *this;
+        }
+
+        constexpr bool test(size_t idx) const { return data.test(idx); }
+        constexpr size_t size() const { return data.size(); }
+        constexpr char_subset&& set() && { data.set(); return std::move(*this); }
+        constexpr char_subset&& flip() && { data.flip(); return std::move(*this); }
+
+    private:
+        stdex::cbitset<meta::distinct_values_count<char>> data = {};
+    };
 
     template<typename Iterator>
     struct recognized_term
@@ -806,37 +837,17 @@ namespace lexer
         using slice = utils::slice;
         using dfa_state_container_type = stdex::cvector<dfa_state, MaxStates>;
         
-        constexpr static char_subset char_subset_from_item(char_range r)
+        constexpr slice prim_char(char c)
         {
-            char_subset res{};
-            for (size_t i = utils::char_to_idx(r.start); i <= utils::char_to_idx(r.end); ++i)
-            {
-                res.set(i);
-            }    
-            return res;
-        }
-        
-        constexpr static char_subset add_item_to_char_subset(char_subset&& s, char_range r)
-        {
-            for (size_t i = utils::char_to_idx(r.start); i <= utils::char_to_idx(r.end); ++i)
-                s.set(i);
-            
-            return s;
-        }
-        
-        constexpr slice add_primary_single_char(char c)
-        {
-            char_subset s;
-            s.set(utils::char_to_idx(c));
-            return add_primary_char_subset(s);
+            return prim_subset(char_subset(char_range(c)));
         }
 
-        constexpr slice add_primary_char_subset(const char_subset& s)
+        constexpr slice prim_subset(char_subset&& s)
         {
             size_t old_size = states.size();
             states.push_back(dfa_state());
             states.back().start_state = 1;
-            for (size_t i = 0; i < std::size(s); ++i)
+            for (size_t i = 0; i < s.size(); ++i)
                 if (s.test(i))
                 {
                     states.back().transitions[i] = size16_t(states.size());
@@ -846,20 +857,17 @@ namespace lexer
             return slice{ size32_t(old_size), 2 };
         }
 
-        constexpr slice add_primary_char_subset_exclusive(char_subset& s)
+        constexpr slice prim_subset_flip(char_subset&& s)
         {
-            s.flip();
-            return add_primary_char_subset(s);
+            return prim_subset(std::move(s).flip());
         }
 
-        constexpr slice add_primary_any_char()
+        constexpr slice prim_any()
         {
-            char_subset s;
-            s.set();
-            return add_primary_char_subset(s);
+            return prim_subset(char_subset().set());
         }
 
-        constexpr slice add_multiplication(slice s)
+        constexpr slice star(slice s)
         {
             size_t b = s.start;
             states[b].end_state = 1;
@@ -871,13 +879,24 @@ namespace lexer
             return s;
         }
 
-        constexpr slice add_optional(slice s)
+        constexpr slice plus(slice s)
+        {
+            size_t b = s.start;
+            for (size_t i = s.start; i < s.start + s.n; ++i)
+            {
+                if (states[i].end_state)
+                    merge(i, b, true);
+            }
+            return s;
+        }
+
+        constexpr slice opt(slice s)
         {
             states[s.start].end_state = 1;
             return s;
         }    
 
-        constexpr slice add_concat(slice s1, slice s2)
+        constexpr slice cat(slice s1, slice s2)
         {
             size_t b = s2.start;
             for (size_t i = s1.start; i < s1.start + s1.n; ++i)
@@ -888,7 +907,7 @@ namespace lexer
             return slice{ s1.start, s1.n + s2.n };
         }
 
-        constexpr slice add_alt(slice s1, slice s2)
+        constexpr slice alt(slice s1, slice s2)
         {
             size_t b1 = s1.start;
             size_t b2 = s2.start;
@@ -957,14 +976,14 @@ namespace lexer
         }
 
     private:
-        constexpr void merge(size_t to, size_t from, bool alt_end_state = false, bool mark_from_as_unreachable = false)
+        constexpr void merge(size_t to, size_t from, bool keep_end_state = false, bool mark_from_as_unreachable = false)
         {
             if (to == from)
                 return;
             dfa_state& s_from = states[from];
             dfa_state& s_to = states[to];
             s_from.start_state = 0;
-            if (alt_end_state)
+            if (keep_end_state)
                 s_to.end_state = s_to.end_state || s_from.end_state;
             else
                 s_to.end_state = s_from.end_state;
@@ -978,7 +997,7 @@ namespace lexer
                 if (tr_to == uninitialized16)
                     tr_to = tr_from;
                 else
-                    merge(tr_to, tr_from, alt_end_state, mark_from_as_unreachable);
+                    merge(tr_to, tr_from, keep_end_state, mark_from_as_unreachable);
             }
 
             auto& cr = s_from.conflicted_recognition;
@@ -1085,9 +1104,16 @@ namespace lexer
 
             if (t.is_trivial())
             {
-                slice new_sl = sm.add_primary_single_char(t.get_data()[0]);
+                slice new_sl{};
+                if (t.get_method() == term_method::exact)
+                    new_sl = sm.prim_char(t.get_data()[0]);
+                else if (t.get_method() == term_method::include)
+                    new_sl = sm.prim_subset(char_subset(t.get_data()));
+                else if (t.get_method() == term_method::exclude)
+                    new_sl = sm.prim_subset_flip(char_subset(t.get_data()));
+                
                 sm.mark_end_states(new_sl, idx);
-                sm.add_alt(prev, new_sl);
+                sm.alt(prev, new_sl);
                 return true;
             }
             else
@@ -1097,7 +1123,7 @@ namespace lexer
                 if (res.has_value())
                 {
                     sm.mark_end_states(res.value(), idx);
-                    sm.add_alt(prev, res.value());
+                    sm.alt(prev, res.value());
                     return true;
                 }
                 else
@@ -2222,7 +2248,7 @@ namespace lexer
         using slice = utils::slice;
         using namespace ftors;
         
-        constexpr term regular_char(exclude("\\[]^-.*?|()"), "regular", 0, associativity::ltor);
+        constexpr term regular_char(exclude("\\[]^-.*+?|()"), "regular", 0, associativity::ltor);
         constexpr nterm<slice> expr("expr");
         constexpr nterm<slice> alt("alt");
         constexpr nterm<slice> concat("concat");
@@ -2235,7 +2261,7 @@ namespace lexer
 
         return parser(
             expr,
-            terms(regular_char, '\\', '[', ']', '^', '-', '.', '*', '?', '|', '(', ')'),
+            terms(regular_char, '\\', '[', ']', '^', '-', '.', '*', '+', '?', '|', '(', ')'),
             nterms(expr, alt, concat, q_expr, primary, c_range, c_subset, c_subset_item, single_char),
             rules(
                 single_char(regular_char),
@@ -2245,26 +2271,30 @@ namespace lexer
                 single_char('\\', '^') >= _e2,
                 single_char('\\', '-') >= _e2,
                 single_char('\\', '.') >= _e2,
+                single_char('\\', '*') >= _e2,
+                single_char('\\', '+') >= _e2,
+                single_char('\\', '?') >= _e2,
                 single_char('\\', '|') >= _e2,
                 single_char('\\', '(') >= _e2,
                 single_char('\\', ')') >= _e2,
                 c_range(single_char, '-', single_char) >= [](char c1, skip, char c2){ return char_range(c1, c2); },
                 c_subset_item(single_char) >= [](char c) { return char_range(c); },
                 c_subset_item(c_range),
-                c_subset(c_subset_item) >= [](char_range r){ return dfa_type::char_subset_from_item(r); },
-                c_subset(c_subset_item, c_subset) >= [](char_range r, char_subset&& s){ return dfa_type::add_item_to_char_subset(std::move(s), r); },
-                primary(single_char) >= [&sm](char c) { return sm.add_primary_single_char(c); },
-                primary('.') >= [&sm](skip) { return sm.add_primary_any_char(); },
-                primary('[', c_subset, ']') >= [&sm](skip, char_subset&& s, skip) { return sm.add_primary_char_subset(s); },
-                primary('[', '^', c_subset, ']') >= [&sm](skip, skip, char_subset&& s, skip) { return sm.add_primary_char_subset_exclusive(s); },
+                c_subset(c_subset_item) >= [](char_range r){ return char_subset(r); },
+                c_subset(c_subset_item, c_subset) >= [](char_range r, char_subset&& s){ return s.add_range(r); },
+                primary(single_char) >= [&sm](char c) { return sm.prim_char(c); },
+                primary('.') >= [&sm](skip) { return sm.prim_any(); },
+                primary('[', c_subset, ']') >= [&sm](skip, char_subset&& s, skip) { return sm.prim_subset(std::move(s)); },
+                primary('[', '^', c_subset, ']') >= [&sm](skip, skip, char_subset&& s, skip) { return sm.prim_subset_flip(std::move(s)); },
                 primary('(', expr, ')') >= _e2,
                 q_expr(primary),
-                q_expr(primary, '*') >= [&sm](slice p, skip) { return sm.add_multiplication(p); },
-                q_expr(primary, '?') >= [&sm](slice p, skip) { return sm.add_optional(p); },
+                q_expr(primary, '*') >= [&sm](slice p, skip) { return sm.star(p); },
+                q_expr(primary, '+') >= [&sm](slice p, skip) { return sm.plus(p); },
+                q_expr(primary, '?') >= [&sm](slice p, skip) { return sm.opt(p); },
                 concat(q_expr),
-                concat(q_expr, concat) >= [&sm](slice p1, slice p2) { return sm.add_concat(p1, p2); },
+                concat(q_expr, concat) >= [&sm](slice p1, slice p2) { return sm.cat(p1, p2); },
                 alt(concat),
-                alt(alt, '|', alt) >= [&sm](slice p1, skip, slice p2) { return sm.add_alt(p1, p2); },
+                alt(alt, '|', alt) >= [&sm](slice p1, skip, slice p2) { return sm.alt(p1, p2); },
                 expr(alt)
             ),
             deduce_max_states{}

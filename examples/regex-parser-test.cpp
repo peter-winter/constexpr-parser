@@ -44,11 +44,13 @@ struct regex
 template<size_t N>
 regex(const char (&)[N]) -> regex<N>;
 
-constexpr regex r("[1-9][0-9]*");
+constexpr regex r("[1-9]+");
 constexpr bool m = r.match("123");
 
 int main()
 {
-    std::cout << m << std::endl;
+    ctpg::str_table<1> tn = {""};
+    r.sm.write_diag_str(std::cout, tn);
+    std::cout << (m ? "Matched" : "Fail") << std::endl;
     return 0;
 }
