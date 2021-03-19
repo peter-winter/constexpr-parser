@@ -75,7 +75,7 @@ int main()
     std::cout << "Fail case: " << b << std::endl;
 
     std::stringstream ss;
-    auto res = p.parse(parse_options{}.set_verbose(true), string_buffer("2 + 2 \n* 2"), ss);
+    auto res = p.parse(parse_options{}.set_verbose(), string_buffer("2 + 2 \n* 2"), ss);
     int rv = res.value();
     std::cout << "Runtime case: " << rv << std::endl;
     std::cout << "Verbose output: " << std::endl << ss.str();

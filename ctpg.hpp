@@ -395,6 +395,13 @@ namespace utils
         size32_t start;
         size32_t n;
     };
+
+    template<typename T>
+    struct fake_table
+    {
+        T operator[](size_t) const { return val; }
+        T val;        
+    };
 }
 
 namespace buffers
@@ -418,6 +425,7 @@ namespace buffers
             constexpr iterator operator ++(int) { iterator i(*this); ++ptr; return i; }
             constexpr bool operator == (const iterator& other) const { return ptr == other.ptr; }
             constexpr iterator operator + (size_t size) const { return iterator{ptr + size}; }
+            constexpr iterator operator - (size_t size) const { return iterator{ptr - size}; }
         };
 
         constexpr iterator begin() const { return iterator{ data }; }
@@ -488,6 +496,23 @@ struct source_point
 {
     size32_t line = 1;
     size32_t column = 1;
+
+    template<typename Iterator>
+    constexpr void update(const Iterator& start, const Iterator& end)
+    {
+        Iterator it = start;
+        while (!(it == end))
+        {
+            if (*it == '\n')
+            {
+                ++line;
+                column = 1;
+            }
+            else
+                ++column;
+            ++it;
+        }
+    }
 
     friend std::ostream& operator << (std::ostream& o, const source_point& sp);
 };
@@ -585,124 +610,14 @@ term(const char (&)[N], const char *, int = 0, associativity = associativity::lt
 
 namespace detail
 {
-    template<typename Arg>
-    constexpr auto make_term(const Arg& arg)
+    struct no_stream
     {
-        return term(arg);
-    }
-
-    class regex_regular_char
-    {
-    public:
-        using value_type = term_value<char>;
-
-        static const size_t data_size = 1;
-        constexpr static const auto& get_data() { return "\\[]^-.*+?|()"; }
-        constexpr static const auto& get_id() { return "$regex_regular$"; }
+        template<typename T>
+        constexpr const no_stream& operator <<(T&&) const { return *this; }
     };
-
-    constexpr auto make_term(regex_regular_char)
-    {
-        return detail::regex_regular_char{};
-    }
-
-    template<typename ValueType>
-    struct fake_root
-    {
-        using value_type = ValueType;
-
-        constexpr auto operator()(const nterm<ValueType>& nt) const;
-
-        constexpr static const char* get_name() { return "##"; };
-    };
-
-    struct eof
-    {
-        constexpr static const char* get_name() { return "<eof>"; }
-    };
-
-    template<typename F, typename L, typename...R>
-    class rule
-    {
-    public:
-        using f_type = F;
-        static const size_t n = sizeof...(R);
-
-        constexpr rule(L l, std::tuple<R...> r) :
-            f(nullptr), l(l), r(r), precedence(0)
-        {}
-
-        template<typename F1>
-        constexpr rule(F1&& f, L l, std::tuple<R...> r) :
-            f(std::move(f)), l(l), r(r), precedence(0)
-        {}
-
-        template<typename F1>
-        constexpr rule(F1&& f, L l, std::tuple<R...> r, int precedence) :
-            f(std::move(f)), l(l), r(r), precedence(precedence)
-        {}
-
-        constexpr auto operator[](int precedence)
-        {
-            return rule<F, L, R...>(std::move(f), l, r, precedence);
-        }
-
-        template<typename F1>
-        constexpr auto operator >= (F1&& f)
-        {
-            return rule<std::decay_t<F1>, L, R...>(std::move(f), l, r, precedence);
-        }
-
-        constexpr const F& get_f() const { return f; }
-        constexpr const L& get_l() const { return l; }
-        constexpr const auto& get_r() const { return r; }
-        constexpr int get_precedence() const { return precedence; }
-
-    private:
-        F f;
-        L l;
-        std::tuple<R...> r;
-        int precedence;
-    };
-
-    template<typename L, typename... R>
-    rule(L l, std::tuple<R...> r) -> rule<std::nullptr_t, L, R...>;
-
-    template<typename Arg>
-    constexpr auto make_rule_item(Arg&& arg)
-    {
-        return term(arg);
-    }
-
-    constexpr auto make_rule_item(regex_regular_char)
-    {
-        return regex_regular_char{};
-    }
-
-    template<typename ValueType>
-    constexpr auto make_rule_item(const nterm<ValueType>& nt)
-    {
-        return nt;
-    }
-
-    template<typename ValueType>
-    constexpr auto fake_root<ValueType>::operator()(const nterm<ValueType>& nt) const
-    {
-        return rule(*this, std::make_tuple(nt));
-    }
 }
 
-template<typename ValueType>
-template<typename... Args>
-constexpr auto nterm<ValueType>::operator()(Args&&... args) const
-{
-    return detail::rule(
-        *this, 
-        std::make_tuple(detail::make_rule_item(args)...)
-    );
-}
-
-namespace lexer
+namespace regex
 {
     using conflicted_terms = size16_t[4];
 
@@ -955,12 +870,22 @@ namespace lexer
         dfa<N>& sm;
     };
 
+    class regex_regular_char
+    {
+    public:
+        using value_type = term_value<char>;
+
+        static const size_t data_size = 1;
+        constexpr static const auto& get_special_chars() { return "\\[]^-.*+?|()"; }
+        constexpr static const auto& get_id() { return "$regex_regular$"; }
+    };
+
     template<size_t N, typename Parser>
-    constexpr bool add_term_to_dfa(detail::regex_regular_char, dfa_builder<N>& b, const Parser&, size_t idx)
+    constexpr bool add_term_to_dfa(regex_regular_char, dfa_builder<N>& b, const Parser&, size_t idx)
     {
         utils::slice prev{0, size32_t(b.size())};
         utils::slice new_sl = b.prim_subset_flip(
-            char_subset(detail::regex_regular_char::get_data())
+            char_subset(regex_regular_char::get_special_chars())
         );
         b.mark_end_states(new_sl, idx);
         b.alt(prev, new_sl);
@@ -996,25 +921,35 @@ namespace lexer
     template<typename Builder>
     constexpr auto create_regex_parser(Builder& b);
 
-    template<size_t N, typename... Terms>
-    constexpr void create_lexer(dfa<N>& sm, const std::tuple<Terms...>& ts)
+    template<size_t N>
+    constexpr size32_t analyze_dfa_size(const char (&pattern)[N])
     {
-        create_lexer_impl(sm, std::index_sequence_for<Terms...>{}, ts);
+        dfa_size_analyzer a;
+        auto p = create_regex_parser(a);
+        auto res = p.parse(buffers::cstring_buffer(pattern));
+        if (!res.has_value())
+            throw std::runtime_error("invalid regex");
+        return res.value().n;
     }
 
-    template<size_t N, typename... Terms, size_t... I>
-    constexpr void create_lexer_impl(dfa<N>& sm, std::index_sequence<I...>, const std::tuple<Terms...>& term_tuple)
-    {        
-        dfa_builder<N> b(sm);
-        auto p = create_regex_parser(b);
-        (void(add_term_to_dfa(std::get<I>(term_tuple), b, p, I)), ...);
-    }
+    struct dfa_match_options
+    {
+        bool verbose = false;
+        source_point sp;
+        constexpr dfa_match_options& set_verbose(bool val = true) { verbose = val; return *this; }
+    };
 
-    template<size_t N, typename Iterator, typename ParserState>
-    constexpr auto recognize(const dfa<N>& sm, const Iterator& start, const Iterator& end, ParserState& ps)
+    template<size_t N, typename Iterator, typename ErrorStream>
+    constexpr auto dfa_match(
+        const dfa<N>& sm, 
+        dfa_match_options options, 
+        const Iterator& start, 
+        const Iterator& end, 
+        ErrorStream& error_stream)
     {
         size16_t state_idx = 0;
         Iterator it = start;
+        Iterator it_prev = it;
         recognized_term<Iterator> rt{ end, uninitialized16 };
         while (true)
         {
@@ -1025,11 +960,12 @@ namespace lexer
                 rt.it = it;
                 rt.term_idx = rec_idx;
 
-                if (ps.options.verbose)
+                if (options.verbose)
                 {
-                    ps.error_stream << ps.current_sp << "REGEX MATCH: Recognized " << rec_idx << "\n";
+                    error_stream << options.sp << "REGEX MATCH: Recognized " << rec_idx << "\n";
                 }
             }
+            options.sp.update(it_prev, it);
             
             if (it == end)
                 break;
@@ -1040,19 +976,19 @@ namespace lexer
 
             state_idx = tr;
 
-            if (ps.options.verbose)
+            if (options.verbose)
             {
-                ps.error_stream << ps.current_sp << "REGEX MATCH: Current char " << *it << "\n";
-                ps.error_stream << ps.current_sp << "REGEX MATCH: New state " << state_idx << "\n";
+                error_stream << options.sp << "REGEX MATCH: Current char " << *it << "\n";
+                error_stream << options.sp << "REGEX MATCH: New state " << state_idx << "\n";
             }
-
+            it_prev = it;
             ++it;
         }
         return rt;
     }
 
     template<typename Stream, typename StrTable>
-    constexpr void write_state_diag_str(const dfa_state& st, Stream& s, size16_t idx, const StrTable& term_names)
+    constexpr void write_dfa_state_diag_str(const dfa_state& st, Stream& s, size16_t idx, const StrTable& term_names)
     {
         s << "STATE " << idx;
         if (st.unreachable)
@@ -1111,18 +1047,158 @@ namespace lexer
     }
 
     template<size_t N, typename Stream, typename StrTable>
-    constexpr void write_diag_str(const dfa<N>& sm, Stream& s, const StrTable& term_names)
+    constexpr void write_dfa_diag_str(const dfa<N>& sm, Stream& stream, const StrTable& term_names)
     {
         for (size_t i = 0; i < sm.size(); ++i)
-        {
-            write_state_diag_str(sm[i], s, i, term_names);
-        }
+            write_dfa_state_diag_str(sm[i], stream, i, term_names);
     }
+
+    template<size_t N, typename Stream>
+    constexpr void write_dfa_diag_str(const dfa<N>& sm, Stream& stream)
+    {
+        write_dfa_diag_str(sm, stream, utils::fake_table<const char*>{""});
+    }
+
+    template<auto& Pattern>
+    struct expr
+    {
+        static const size32_t dfa_size = analyze_dfa_size(Pattern);
+
+        constexpr expr()
+        {
+            dfa_builder<dfa_size> b(sm);
+            auto p = create_regex_parser(b);
+            auto s = p.parse(buffers::cstring_buffer(Pattern));
+            if (!s.has_value())
+                throw std::runtime_error("invalid regex");
+            b.mark_end_states(s.value(), 0);
+        }
+
+        template<size_t N1>
+        constexpr bool match(const char(&str)[N1]) const
+        {
+            buffers::cstring_buffer buf(str);
+            detail::no_stream error_stream;
+            auto res = dfa_match(sm, dfa_match_options{}, buf.begin(), buf.end(), error_stream);
+            return res.term_idx == 0 && res.it == buf.end();
+        }
+        
+        dfa<dfa_size> sm;
+    };
+}
+
+namespace detail
+{
+    template<typename Arg>
+    constexpr auto make_term(const Arg& arg)
+    {
+        return term(arg);
+    }
+
+    constexpr auto make_term(regex::regex_regular_char)
+    {
+        return regex::regex_regular_char{};
+    }
+
+    template<typename ValueType>
+    struct fake_root
+    {
+        using value_type = ValueType;
+
+        constexpr auto operator()(const nterm<ValueType>& nt) const;
+
+        constexpr static const char* get_name() { return "##"; };
+    };
+
+    struct eof
+    {
+        constexpr static const char* get_name() { return "<eof>"; }
+    };
+
+    template<typename F, typename L, typename...R>
+    class rule
+    {
+    public:
+        using f_type = F;
+        static const size_t n = sizeof...(R);
+
+        constexpr rule(L l, std::tuple<R...> r) :
+            f(nullptr), l(l), r(r), precedence(0)
+        {}
+
+        template<typename F1>
+        constexpr rule(F1&& f, L l, std::tuple<R...> r) :
+            f(std::move(f)), l(l), r(r), precedence(0)
+        {}
+
+        template<typename F1>
+        constexpr rule(F1&& f, L l, std::tuple<R...> r, int precedence) :
+            f(std::move(f)), l(l), r(r), precedence(precedence)
+        {}
+
+        constexpr auto operator[](int precedence)
+        {
+            return rule<F, L, R...>(std::move(f), l, r, precedence);
+        }
+
+        template<typename F1>
+        constexpr auto operator >= (F1&& f)
+        {
+            return rule<std::decay_t<F1>, L, R...>(std::move(f), l, r, precedence);
+        }
+
+        constexpr const F& get_f() const { return f; }
+        constexpr const L& get_l() const { return l; }
+        constexpr const auto& get_r() const { return r; }
+        constexpr int get_precedence() const { return precedence; }
+
+    private:
+        F f;
+        L l;
+        std::tuple<R...> r;
+        int precedence;
+    };
+
+    template<typename L, typename... R>
+    rule(L l, std::tuple<R...> r) -> rule<std::nullptr_t, L, R...>;
+
+    template<typename Arg>
+    constexpr auto make_rule_item(Arg&& arg)
+    {
+        return term(arg);
+    }
+
+    constexpr auto make_rule_item(regex::regex_regular_char)
+    {
+        return regex::regex_regular_char{};
+    }
+
+    template<typename ValueType>
+    constexpr auto make_rule_item(const nterm<ValueType>& nt)
+    {
+        return nt;
+    }
+
+    template<typename ValueType>
+    constexpr auto fake_root<ValueType>::operator()(const nterm<ValueType>& nt) const
+    {
+        return rule(*this, std::make_tuple(nt));
+    }
+}
+
+template<typename ValueType>
+template<typename... Args>
+constexpr auto nterm<ValueType>::operator()(Args&&... args) const
+{
+    return detail::rule(
+        *this, 
+        std::make_tuple(detail::make_rule_item(args)...)
+    );
 }
 
 struct parse_options
 {
-    constexpr parse_options& set_verbose(bool val = false) { verbose = val; return *this; }
+    constexpr parse_options& set_verbose(bool val = true) { verbose = val; return *this; }
     constexpr parse_options& set_skip_whitespace(bool val = true) { skip_whitespace = val; return *this; }
     
     bool verbose = false;
@@ -1157,12 +1233,6 @@ namespace detail
         ErrorStream& error_stream;
         parse_options options;
         source_point current_sp;
-    };
-
-    struct no_stream
-    {
-        template<typename T>
-        constexpr const no_stream& operator <<(T&&) const { return *this; }
     };
 
     template<typename Buffer, size_t EmptyRulesCount>
@@ -1254,15 +1324,16 @@ public:
             for (size_t i = 0; i < 4; ++i)
                 x[i] = uninitialized16;
 
+        auto seq_for_terms = std::make_index_sequence<std::tuple_size_v<term_tuple_type>>{};
         analyze_nterms(std::make_index_sequence<std::tuple_size_v<nterm_tuple_type>>{});
         analyze_nterm(detail::fake_root<value_type_t<root_nterm_type>>{});
-        analyze_terms(std::make_index_sequence<std::tuple_size_v<term_tuple_type>>{});
+        analyze_terms(seq_for_terms);
         analyze_eof();
         analyze_rules(std::make_index_sequence<std::tuple_size_v<rule_tuple_type>>{}, root);
         analyze_states();
         
         if (!trivial_lexical_analyzer)
-            create_lexer(lexer_sm, term_tuple);
+            create_lexer(seq_for_terms);
     }
 
     template<typename Buffer>
@@ -1305,7 +1376,7 @@ public:
                 if (ps.options.skip_whitespace)
                 {
                     iterator after_ws = skip_whitespace(it, buffer.end());
-                    update_source_point(ps, it, after_ws);
+                    ps.current_sp.update(it, after_ws);
                     it = after_ws;
                 }
 
@@ -1328,7 +1399,7 @@ public:
             if (entry.kind == parse_table_entry_kind::shift)
             {
                 shift(ps, buffer.get_view(it, term_end), term_idx, entry.shift);
-                update_source_point(ps, it, term_end);
+                ps.current_sp.update(it, term_end);
                 it = term_end;
             }
             else if (entry.kind == parse_table_entry_kind::reduce)
@@ -1382,6 +1453,7 @@ private:
     static const size_t situation_size = max_rule_element_count + 1;
     static const size_t situation_address_space_size = rule_count * situation_size * term_count;    
     static const size_t total_regex_size = (0 + ... + Terms::data_size);
+    static const size_t lexer_dfa_size = total_regex_size * 2;
 
     using value_variant_type = meta::unique_types_variant_t<
         std::nullptr_t,
@@ -1460,18 +1532,18 @@ private:
         term_associativities[eof_idx] = associativity::ltor;
     }
 
-    constexpr void analyze_term(detail::regex_regular_char t, size16_t idx)
+    constexpr void analyze_term(regex::regex_regular_char t, size16_t idx)
     {
-        term_names[idx] = term_ids[idx] = detail::regex_regular_char::get_id();
+        term_names[idx] = term_ids[idx] = regex::regex_regular_char::get_id();
         term_precedences[idx] = 0;
         term_associativities[idx] = associativity::ltor;
         single_char_terms.set(idx);
         
         for (size_t i = 0; i < std::size(trivial_term_table); ++i)
         {
-            size_t idx_found = utils::find_char(utils::idx_to_char(i), t.get_data());
+            size_t idx_found = utils::find_char(utils::idx_to_char(i), t.get_special_chars());
             if (idx_found == uninitialized)
-                lexer::add_conflicted_term(trivial_term_table[i], idx);
+                regex::add_conflicted_term(trivial_term_table[i], idx);
         }
     }
 
@@ -1485,7 +1557,7 @@ private:
 
         if (t.is_trivial())
         {
-            lexer::add_conflicted_term(trivial_term_table[utils::char_to_idx(t.get_data()[0])], idx);
+            regex::add_conflicted_term(trivial_term_table[utils::char_to_idx(t.get_data()[0])], idx);
             single_char_terms.set(idx);
         }
         else
@@ -1510,9 +1582,9 @@ private:
         return symbol{ true, size16_t(utils::find_str(term_ids, t.get_id())) };
     }
 
-    constexpr auto make_symbol(detail::regex_regular_char) const
+    constexpr auto make_symbol(regex::regex_regular_char) const
     {
-        return symbol{ true, size16_t(utils::find_str(term_ids, detail::regex_regular_char::get_id())) };
+        return symbol{ true, size16_t(utils::find_str(term_ids, regex::regex_regular_char::get_id())) };
     }
 
     template<typename ValueType>
@@ -2014,13 +2086,16 @@ private:
     template<typename Iterator>
     constexpr auto get_next_term_trivial(const Iterator& start, const Iterator& end) const
     {
-        return lexer::recognized_term<Iterator>{ start + 1, trivial_term_table[utils::char_to_idx(*start)][0] };
+        return regex::recognized_term<Iterator>{ start + 1, trivial_term_table[utils::char_to_idx(*start)][0] };
     }
 
     template<typename ParserState, typename Iterator>
     constexpr auto get_next_term_dfa(ParserState& ps, const Iterator& start, const Iterator& end) const
     {
-        return lexer::recognize(lexer_sm, start, end, ps);
+        regex::dfa_match_options opts;
+        opts.set_verbose(ps.options.verbose);
+        opts.sp = ps.current_sp;
+        return regex::dfa_match(lexer_sm, opts, start, end, ps.error_stream);
     }
 
     template<typename ParserState, typename Iterator>
@@ -2028,7 +2103,7 @@ private:
     {
         if (start == end)
         {
-            return lexer::recognized_term<Iterator>{ end, eof_idx };
+            return regex::recognized_term<Iterator>{ end, eof_idx };
         }
 
         if (trivial_lexical_analyzer)
@@ -2054,23 +2129,6 @@ private:
         return it;
     }
 
-    template<typename ParserState, typename Iterator>
-    constexpr void update_source_point(ParserState& ps, const Iterator& start, const Iterator& end) const
-    {
-        Iterator it = start;
-        while (!(it == end))
-        {
-            if (*it == '\n')
-            {
-                ++ps.current_sp.line;
-                ps.current_sp.column = 1;
-            }
-            else
-                ++ps.current_sp.column;
-            ++it;
-        }
-    }
-
     template<typename ParserState>
     constexpr void unexpected_char(ParserState& ps, char c) const
     {
@@ -2082,6 +2140,14 @@ private:
     {
         if (ps.options.verbose)
             ps.error_stream << ps.current_sp << "PARSE: Recognized " << term_names[term_idx] << " \n";
+    }
+
+    template<size_t... I>
+    constexpr void create_lexer(std::index_sequence<I...>)
+    {        
+        regex::dfa_builder<lexer_dfa_size> b(lexer_sm);
+        auto p = regex::create_regex_parser(b);
+        (void(add_term_to_dfa(std::get<I>(term_tuple), b, p, I)), ...);
     }
     
     str_table<term_count> term_names = { };
@@ -2107,7 +2173,7 @@ private:
     associativity term_associativities[term_count] = { associativity::ltor };
     int rule_precedences[rule_count] = { };
     size16_t rule_last_terms[rule_count] = { };
-    lexer::conflicted_terms trivial_term_table[meta::distinct_values_count<char>] = { };
+    regex::conflicted_terms trivial_term_table[meta::distinct_values_count<char>] = { };
     bool trivial_lexical_analyzer = true;
     term_tuple_type term_tuple;
     nterm_tuple_type nterm_tuple;
@@ -2115,7 +2181,7 @@ private:
     using value_reductor = value_variant_type(*)(const rule_tuple_type&, value_variant_type*);
     value_reductor value_reductors[rule_count] = {};
     term_subset single_char_terms = {};
-    using dfa_type = lexer::dfa<total_regex_size * 2>;
+    using dfa_type = regex::dfa<lexer_dfa_size>;
     dfa_type lexer_sm = {};
 };
 
@@ -2218,7 +2284,7 @@ namespace ftors
     ret(T&&) -> ret<std::decay_t<T>>;    
 }
 
-namespace lexer
+namespace regex
 {
     template<typename Builder>
     constexpr auto create_regex_parser(Builder& b)
@@ -2238,10 +2304,10 @@ namespace lexer
 
         return parser(
             expr,
-            terms(detail::regex_regular_char{}, '\\', '[', ']', '^', '-', '.', '*', '+', '?', '|', '(', ')'),
+            terms(regex_regular_char{}, '\\', '[', ']', '^', '-', '.', '*', '+', '?', '|', '(', ')'),
             nterms(expr, alt, concat, q_expr, primary, c_range, c_subset, c_subset_item, single_char),
             rules(
-                single_char(detail::regex_regular_char{}),
+                single_char(regex_regular_char{}),
                 single_char('\\', '\\') >= _e2,
                 single_char('\\', '[') >= _e2,
                 single_char('\\', ']') >= _e2,
