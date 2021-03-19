@@ -13,7 +13,7 @@ constexpr bool m = r.match("123");
 
 int main()
 {
-    regex::write_dfa_diag_str(r.sm, std::cout);
+    r.write_diag_str(std::cout);
     std::cout << (m ? "Matched" : "Fail") << std::endl;
     return 0;
 }

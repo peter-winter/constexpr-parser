@@ -42,11 +42,13 @@ constexpr int get_int(std::string_view sv)
 
 constexpr nterm<int> expr("expr");
 
-constexpr term o_plus('+', 1);
-constexpr term o_minus('-', 1);
-constexpr term o_mul('*', 2);
-constexpr term o_div('/', 2);
-constexpr term number("[1-9][0-9]*", "number");
+constexpr char_term o_plus('+', 1);
+constexpr char_term o_minus('-', 1);
+constexpr char_term o_mul('*', 2);
+constexpr char_term o_div('/', 2);
+
+constexpr char number_pattern[] = "[1-9][0-9]*";
+constexpr regex_term<number_pattern> number("number");
 
 constexpr parser p(
     expr,
