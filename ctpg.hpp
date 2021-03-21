@@ -306,12 +306,12 @@ namespace utils
 
     constexpr size_t char_to_idx(char c)
     {
-        return size_t(int(c) - std::numeric_limits<char>::min());
+        return static_cast<size_t>(static_cast<unsigned char>(c)) & 0xff;
     }
 
     constexpr char idx_to_char(size_t idx)
     {
-        return char(int(idx) + std::numeric_limits<char>::min());
+        return static_cast<char>(static_cast<unsigned char>(idx & 0xff));
     }
 
     class char_names
@@ -432,13 +432,11 @@ namespace buffers
             constexpr iterator& operator ++() { ++ptr; return *this; }
             constexpr iterator operator ++(int) { iterator i(*this); ++ptr; return i; }
             constexpr bool operator == (const iterator& other) const { return ptr == other.ptr; }
-            constexpr iterator operator + (size_t size) const { return iterator{ptr + size}; }
-            constexpr iterator operator - (size_t size) const { return iterator{ptr - size}; }
         };
 
         constexpr iterator begin() const { return iterator{ data }; }
         constexpr iterator end() const { return iterator{ data + N - 1 }; }
-        constexpr std::string_view get_view(const iterator& start, const iterator& end) const { return std::string_view(start.ptr, end.ptr - start.ptr); }
+        constexpr std::string_view get_view(iterator start, iterator end) const { return std::string_view(start.ptr, end.ptr - start.ptr); }
     
     private:
         char data[N] = { 0 };
@@ -463,7 +461,7 @@ namespace buffers
         
         using iterator = std::string::const_iterator;
 
-        std::string_view get_view(const iterator& start, const iterator& end) const
+        std::string_view get_view(iterator start, iterator end) const
         { 
             return std::string_view(str.data() + (start - str.begin()), end - start);
         }
@@ -506,19 +504,18 @@ struct source_point
     size32_t column = 1;
 
     template<typename Iterator>
-    constexpr void update(const Iterator& start, const Iterator& end)
+    constexpr void update(Iterator start, Iterator end)
     {
-        Iterator it = start;
-        while (!(it == end))
+        while (!(start == end))
         {
-            if (*it == '\n')
+            if (*start == '\n')
             {
                 ++line;
                 column = 1;
             }
             else
                 ++column;
-            ++it;
+            ++start;
         }
     }
 
@@ -972,13 +969,12 @@ namespace regex
     constexpr auto dfa_match(
         const dfa<N>& sm, 
         dfa_match_options options, 
-        const Iterator& start, 
-        const Iterator& end, 
+        Iterator start, 
+        Iterator end, 
         ErrorStream& error_stream)
     {
         size16_t state_idx = 0;
-        Iterator it = start;
-        Iterator it_prev = it;
+        Iterator it_prev = start;
         recognized_term<Iterator> rt{ end, uninitialized16 };
         while (true)
         {
@@ -986,7 +982,7 @@ namespace regex
             size16_t rec_idx = state.conflicted_recognition[0];
             if (rec_idx != uninitialized16)
             {
-                rt.it = it;
+                rt.it = start;
                 rt.term_idx = rec_idx;
 
                 if (options.verbose)
@@ -994,12 +990,12 @@ namespace regex
                     error_stream << options.sp << "REGEX MATCH: Recognized " << rec_idx << "\n";
                 }
             }
-            options.sp.update(it_prev, it);
+            options.sp.update(it_prev, start);
             
-            if (it == end)
+            if (start == end)
                 break;
             
-            size16_t tr = state.transitions[utils::char_to_idx(*it)];
+            size16_t tr = state.transitions[utils::char_to_idx(*start)];
             if (tr == uninitialized16)
                 break;
 
@@ -1007,11 +1003,11 @@ namespace regex
 
             if (options.verbose)
             {
-                error_stream << options.sp << "REGEX MATCH: Current char " << *it << "\n";
+                error_stream << options.sp << "REGEX MATCH: Current char " << *start << "\n";
                 error_stream << options.sp << "REGEX MATCH: New state " << state_idx << "\n";
             }
-            it_prev = it;
-            ++it;
+            it_prev = start;
+            ++start;
         }
         return rt;
     }
@@ -1352,9 +1348,7 @@ public:
         nterm_tuple(nterms),
         rule_tuple(std::move(rules))
     {
-        for (auto& x : trivial_term_table)
-            for (size_t i = 0; i < 4; ++i)
-                x[i] = uninitialized16;
+        initialize_trivial_terms();
 
         auto seq_for_terms = std::make_index_sequence<std::tuple_size_v<term_tuple_type>>{};
         analyze_nterms(std::make_index_sequence<std::tuple_size_v<nterm_tuple_type>>{});
@@ -1467,9 +1461,18 @@ public:
 
         s << "\n" << "LEXICAL ANALYZER" << "\n" << "\n";
         if (trivial_lexical_analyzer)
-            s << "Trivial lookup" << "\n";
+        {
+            s << "Trivial lookup \n";
+            for (size_t i = 0; i < std::size(trivial_term_table); ++i)
+            {
+                auto idx = trivial_term_table[i][0];
+                if (idx != uninitialized16)
+                    s << i << "[" << term_names[idx] << "]  ";
+            }
+            s << "\n";
+        }
         else
-            lexer_sm.write_diag_str(s, term_names);
+            regex::write_dfa_diag_str(lexer_sm, s, term_names);
     }
 
 private:
@@ -1555,6 +1558,13 @@ private:
         return term ? nterm_count + idx : idx;
     }
 
+    constexpr void initialize_trivial_terms()
+    {
+        for (auto& x : trivial_term_table)
+            for (auto& v : x)
+                v = uninitialized16;
+    }
+
     constexpr void analyze_eof()
     {
         term_names[eof_idx] = detail::eof::get_name();
@@ -1576,7 +1586,7 @@ private:
     {
         analyze_base_term(t, idx);
         
-        for (size_t i = 0; i < std::size(trivial_term_table); ++i)
+        for (size_t i = 1; i < std::size(trivial_term_table); ++i)
         {
             size_t idx_found = utils::find_char(utils::idx_to_char(i), regex::exclude_regex_special_chars::excluded_chars);
             if (idx_found == uninitialized)
@@ -2115,13 +2125,14 @@ private:
     }
     
     template<typename Iterator>
-    constexpr auto get_next_term_trivial(const Iterator& start, const Iterator& end) const
+    constexpr auto get_next_term_trivial(Iterator start, Iterator end) const
     {
-        return regex::recognized_term<Iterator>{ start + 1, trivial_term_table[utils::char_to_idx(*start)][0] };
+        auto idx = trivial_term_table[utils::char_to_idx(*start)][0];
+        return regex::recognized_term<Iterator>{ ++start, idx };
     }
 
     template<typename ParserState, typename Iterator>
-    constexpr auto get_next_term_dfa(ParserState& ps, const Iterator& start, const Iterator& end) const
+    constexpr auto get_next_term_dfa(ParserState& ps, Iterator start, Iterator end) const
     {
         regex::dfa_match_options opts;
         opts.set_verbose(ps.options.verbose);
@@ -2130,7 +2141,7 @@ private:
     }
 
     template<typename ParserState, typename Iterator>
-    constexpr auto get_next_term(ParserState& ps, const Iterator& start, const Iterator& end) const
+    constexpr auto get_next_term(ParserState& ps, Iterator start, Iterator end) const
     {
         if (start == end)
         {
@@ -2144,20 +2155,19 @@ private:
     }
 
     template<typename Iterator>
-    constexpr Iterator skip_whitespace(const Iterator& start, const Iterator& end) const
+    constexpr Iterator skip_whitespace(Iterator start, Iterator end) const
     {
         constexpr char space_chars[] = { 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x20, 0x00 };
 
-        Iterator it = start;
         while (true)
         {
-            if (it == end)
+            if (start == end)
                 break;
-            if (utils::find_char(*it, space_chars) == uninitialized)
+            if (utils::find_char(*start, space_chars) == uninitialized)
                 break;
-            ++it;                            
+            ++start;
         }
-        return it;
+        return start;
     }
 
     template<typename ParserState>
@@ -2178,7 +2188,7 @@ private:
     {        
         regex::dfa_builder<lexer_dfa_size> b(lexer_sm);
         auto p = regex::create_regex_parser(b);
-        (void(add_term_data_to_dfa(std::get<I>(term_tuple).get_data(), b, p, I)), ...);
+        (void(regex::add_term_data_to_dfa(std::get<I>(term_tuple).get_data(), b, p, I)), ...);
     }
     
     str_table<term_count> term_names = { };

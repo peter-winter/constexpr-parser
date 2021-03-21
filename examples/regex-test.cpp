@@ -15,5 +15,8 @@ int main()
 {
     r.write_diag_str(std::cout);
     std::cout << (m ? "Matched" : "Fail") << std::endl;
+
+    regex::dfa_size_analyzer a;
+    regex::create_regex_parser(a).write_diag_str(std::cout);
     return 0;
 }
