@@ -677,6 +677,20 @@ namespace regex
         char end;
     };
 
+    constexpr char hex_digits_to_char(char d1, char d2)
+    {
+        auto dd = [](char d)
+        { 
+            if (d >= 'A' && d <= 'F')
+                return 10 + d - 'A';
+            else if (d >= 'a' && d <= 'f') 
+                return 10 + d - 'a';
+            else
+                return d - '0';
+        };
+        return dd(d1) * 16 + dd(d2);
+    }
+
     class char_subset
     {
     public:
@@ -887,11 +901,29 @@ namespace regex
         dfa<N>& sm;
     };
 
-    struct exclude_regex_special_chars
+    struct regex_special_chars
     {
-        constexpr static char excluded_chars[] = "\\[]^-.*+?|()";
+        constexpr static char chars[] = "\\[]^-.*+?|()abcdefABCDEF0123456789x";
     };
     
+    struct regex_hex_digit_chars
+    {
+        constexpr static char chars[] = "abcdefABCDEF0123456789";
+    };
+
+    class regex_hex_digit : public term
+    {
+    public:
+        using value_type = term_value<char>;
+        static const size_t dfa_size = 2;
+        static const bool is_trivial = true;
+
+        constexpr const char* get_id() const { return "$regex_hex_digit$"; }
+        constexpr const char* get_name() const { return get_id(); }
+        
+        constexpr auto get_data() const { return regex_hex_digit_chars{}; }
+    };
+
     class regex_regular_char : public term
     {
     public:
@@ -902,15 +934,27 @@ namespace regex
         constexpr const char* get_id() const { return "$regex_regular$"; }
         constexpr const char* get_name() const { return get_id(); }
         
-        constexpr auto get_data() const { return exclude_regex_special_chars{}; }
+        constexpr auto get_data() const { return regex_special_chars{}; }
     };
 
     template<size_t N, typename Parser>
-    constexpr bool add_term_data_to_dfa(exclude_regex_special_chars, dfa_builder<N>& b, const Parser&, size_t idx)
+    constexpr bool add_term_data_to_dfa(regex_special_chars, dfa_builder<N>& b, const Parser&, size_t idx)
     {
         utils::slice prev{0, size32_t(b.size())};
         utils::slice new_sl = b.prim_subset_flip(
-            char_subset(exclude_regex_special_chars::excluded_chars)
+            char_subset(regex_special_chars::chars)
+        );
+        b.mark_end_states(new_sl, idx);
+        b.alt(prev, new_sl);
+        return true;
+    }
+
+    template<size_t N, typename Parser>
+    constexpr bool add_term_data_to_dfa(regex_hex_digit_chars, dfa_builder<N>& b, const Parser&, size_t idx)
+    {
+        utils::slice prev{0, size32_t(b.size())};
+        utils::slice new_sl = b.prim_subset(
+            char_subset(regex_hex_digit_chars::chars)
         );
         b.mark_end_states(new_sl, idx);
         b.alt(prev, new_sl);
@@ -1582,13 +1626,24 @@ private:
         term_ids[idx] = t.get_id();
     }
 
+    constexpr void analyze_term(const regex::regex_hex_digit& t, size16_t idx)
+    {
+        analyze_base_term(t, idx);
+        
+        for (auto c : regex::regex_hex_digit_chars::chars)
+        {
+            regex::add_conflicted_term(trivial_term_table[utils::char_to_idx(c)], idx);
+        }
+        single_char_terms.set(idx);
+    }
+
     constexpr void analyze_term(const regex::regex_regular_char& t, size16_t idx)
     {
         analyze_base_term(t, idx);
         
         for (size_t i = 1; i < std::size(trivial_term_table); ++i)
         {
-            size_t idx_found = utils::find_char(utils::idx_to_char(i), regex::exclude_regex_special_chars::excluded_chars);
+            size_t idx_found = utils::find_char(utils::idx_to_char(i), regex::regex_special_chars::chars);
             if (idx_found == uninitialized)
                 regex::add_conflicted_term(trivial_term_table[i], idx);
         }
@@ -2345,10 +2400,12 @@ namespace regex
 
         return parser(
             expr,
-            terms(regex_regular_char{}, '\\', '[', ']', '^', '-', '.', '*', '+', '?', '|', '(', ')'),
+            terms(regex_regular_char{}, regex_hex_digit{}, 'x', '\\', '[', ']', '^', '-', '.', '*', '+', '?', '|', '(', ')'),
             nterms(expr, alt, concat, q_expr, primary, c_range, c_subset, c_subset_item, single_char),
             rules(
                 single_char(regex_regular_char{}),
+                single_char(regex_hex_digit{}),
+                single_char('x'),
                 single_char('\\', '\\') >= _e2,
                 single_char('\\', '[') >= _e2,
                 single_char('\\', ']') >= _e2,
@@ -2361,6 +2418,7 @@ namespace regex
                 single_char('\\', '|') >= _e2,
                 single_char('\\', '(') >= _e2,
                 single_char('\\', ')') >= _e2,
+                single_char('\\', 'x', regex_hex_digit{}, regex_hex_digit{}) >= [](skip, skip, char d1, char d2){ return hex_digits_to_char(d1, d2); },
                 c_range(single_char, '-', single_char) >= [](char c1, skip, char c2){ return char_range(c1, c2); },
                 c_subset_item(single_char) >= [](char c) { return char_range(c); },
                 c_subset_item(c_range),
