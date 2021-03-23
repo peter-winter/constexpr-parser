@@ -5,6 +5,8 @@
 #include <string>
 #include <vector>
 #include <map>
+#include <cuchar>
+#include <climits>
 
 using namespace ctpg;
 using namespace ctpg::ftors;
@@ -99,9 +101,62 @@ constexpr double to_js_number(std::string_view sv)
     return result;
 }
 
+constexpr char hex_digits_to_char(char d1, char d2)
+{
+    auto dd = [](char d)
+    { 
+        if (d >= 'A' && d <= 'F')
+            return 10 + d - 'A';
+        else if (d >= 'a' && d <= 'f') 
+            return 10 + d - 'a';
+        else
+            return d - '0';
+    };
+    return dd(d1) * 16 + dd(d2);
+}
+
 std::string to_js_string(std::string_view sv)
 {
-    return std::string(sv.begin() + 1, sv.end() - 1);
+    std::string str;
+    for (size_t i = 1; i < sv.size() - 1; ++i)
+    {
+        char c = sv[i];
+        if (c == '\\')
+        {
+            c = sv[++i];
+            if (c == 'u')
+            {
+                ++i;
+                char arr[2] = { 
+                    hex_digits_to_char(sv[i + 2], sv[i + 3]),
+                    hex_digits_to_char(sv[i], sv[i + 1])
+                };
+                std::mbstate_t state{};
+                char out[MB_LEN_MAX]{};
+                char16_t c16 = *((char16_t*)arr);
+                std::size_t len = std::c16rtomb(out, c16, &state);
+                str.append(out, len);
+                i += 4;
+            }
+            else
+            {
+                if (c == 'b')
+                    c = '\x08';
+                else if (c == 't')
+                    c = '\x09';
+                else if (c == 'n')
+                    c = '\x0a';
+                else if (c == 'f')
+                    c = '\x0c';
+                else if (c == 'r')
+                    c = '\x0d';
+                str.append(1, c);
+            }
+        }
+        else
+            str.append(1, c);
+    }
+    return str;
 }
 
 auto to_array(js_value_type&& v)
@@ -175,8 +230,12 @@ constexpr parser js_parser(
         js_value(js_object),
         js_array('[', js_array_elements, ']') 
             >= _e2,
+        js_array('[', ']') 
+            >= [](skip, skip) { return js_array_type(); },
         js_object('{', js_object_elements, '}')
             >= _e2,
+        js_object('{', '}')
+            >= [](skip, skip) { return js_object_type(); },
         js_array_elements(js_value) 
             >= [](auto&& v) { return to_array(std::move(v)); },
         js_array_elements(js_array_elements, ',', js_value) 
@@ -195,17 +254,13 @@ int main(int argc, char* argv[])
     js_parser.write_diag_str(std::cout);
 
     if (argc < 2)
-    {
-        auto res = js_parser.parse(
-            parse_options{}.set_verbose(), 
-            buffers::string_buffer(R"_({"k": {"a": [11, 22, 33]}, "g": 1})_"), 
-            std::cout);
-        std::cout << res.value().at("k").as_object().at("a").as_array().at(2).as_number() << std::endl;
-        return 0;
-    }
-    js_parser.parse(
+        return -1;
+    
+    auto res = js_parser.parse(
         parse_options{}.set_verbose(), 
         buffers::string_buffer(argv[1]), 
         std::cout);
+
+    std::cout << res.value().at("key").as_string() << std::endl;
     return 0;
 }

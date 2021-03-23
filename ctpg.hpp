@@ -573,7 +573,9 @@ class regex_term : public term
 public:
     using value_type = term_value<std::string_view>;
     static const size_t dfa_size = regex::analyze_dfa_size(Pattern);
+    static const bool is_single_char = false;
     static const bool is_trivial = false;
+    
     static const size_t pattern_size = std::size(Pattern);
     
     constexpr regex_term(associativity a = associativity::ltor) :
@@ -607,6 +609,7 @@ class char_term : public term
 public:
     using value_type = term_value<char>;
     static const size_t dfa_size = 2;
+    static const bool is_single_char = true;
     static const bool is_trivial = true;
 
     constexpr char_term(char c, int precedence = 0, associativity a = associativity::ltor):
@@ -699,8 +702,8 @@ namespace regex
         template<size_t N>
         constexpr char_subset(const char (&str)[N])
         {
-            for (char c : str)
-                data.set(utils::char_to_idx(c));
+            for (size_t i = 0; i < N - 1; ++i)  // ignore trailing 0, so N - 1
+                data.set(utils::char_to_idx(str[i]));
         }
 
         constexpr char_subset(char_range r)
@@ -916,6 +919,7 @@ namespace regex
     public:
         using value_type = term_value<char>;
         static const size_t dfa_size = 2;
+        static const bool is_single_char = true;
         static const bool is_trivial = true;
 
         constexpr const char* get_id() const { return "$regex_hex_digit$"; }
@@ -929,6 +933,7 @@ namespace regex
     public:
         using value_type = term_value<char>;
         static const size_t dfa_size = 2;
+        static const bool is_single_char = true;
         static const bool is_trivial = true;
 
         constexpr const char* get_id() const { return "$regex_regular$"; }
@@ -940,10 +945,12 @@ namespace regex
     template<size_t N, typename Parser>
     constexpr bool add_term_data_to_dfa(regex_special_chars, dfa_builder<N>& b, const Parser&, size_t idx)
     {
+        char_subset cs(regex_special_chars::chars);
+        cs.add_range(char_range('\0', '\x1f'));
+        cs.add_range(char_range('\x7f', '\xff'));
+
         utils::slice prev{0, size32_t(b.size())};
-        utils::slice new_sl = b.prim_subset_flip(
-            char_subset(regex_special_chars::chars)
-        );
+        utils::slice new_sl = b.prim_subset_flip(std::move(cs));
         b.mark_end_states(new_sl, idx);
         b.alt(prev, new_sl);
         return true;
@@ -1392,8 +1399,6 @@ public:
         nterm_tuple(nterms),
         rule_tuple(std::move(rules))
     {
-        initialize_trivial_terms();
-
         auto seq_for_terms = std::make_index_sequence<std::tuple_size_v<term_tuple_type>>{};
         analyze_nterms(std::make_index_sequence<std::tuple_size_v<nterm_tuple_type>>{});
         analyze_nterm(detail::fake_root<value_type_t<root_nterm_type>>{});
@@ -1402,8 +1407,7 @@ public:
         analyze_rules(std::make_index_sequence<std::tuple_size_v<rule_tuple_type>>{}, root);
         analyze_states();
         
-        if (!trivial_lexical_analyzer)
-            create_lexer(seq_for_terms);
+        create_lexer(seq_for_terms);
     }
 
     template<typename Buffer>
@@ -1504,19 +1508,7 @@ public:
         }
 
         s << "\n" << "LEXICAL ANALYZER" << "\n" << "\n";
-        if (trivial_lexical_analyzer)
-        {
-            s << "Trivial lookup \n";
-            for (size_t i = 0; i < std::size(trivial_term_table); ++i)
-            {
-                auto idx = trivial_term_table[i][0];
-                if (idx != uninitialized16)
-                    s << i << "[" << term_names[idx] << "]  ";
-            }
-            s << "\n";
-        }
-        else
-            regex::write_dfa_diag_str(lexer_sm, s, term_names);
+        regex::write_dfa_diag_str(lexer_sm, s, term_names);
     }
 
 private:
@@ -1601,14 +1593,7 @@ private:
     {
         return term ? nterm_count + idx : idx;
     }
-
-    constexpr void initialize_trivial_terms()
-    {
-        for (auto& x : trivial_term_table)
-            for (auto& v : x)
-                v = uninitialized16;
-    }
-
+    
     constexpr void analyze_eof()
     {
         term_names[eof_idx] = detail::eof::get_name();
@@ -1618,51 +1603,14 @@ private:
     }
 
     template<typename Term>
-    constexpr void analyze_base_term(const Term& t, size16_t idx)
+    constexpr void analyze_term(const Term& t, size16_t idx)
     {
         term_precedences[idx] = t.get_precedence();
         term_associativities[idx] = t.get_associativity();
         term_names[idx] = t.get_name();
         term_ids[idx] = t.get_id();
-    }
-
-    constexpr void analyze_term(const regex::regex_hex_digit& t, size16_t idx)
-    {
-        analyze_base_term(t, idx);
-        
-        for (auto c : regex::regex_hex_digit_chars::chars)
-        {
-            regex::add_conflicted_term(trivial_term_table[utils::char_to_idx(c)], idx);
-        }
-        single_char_terms.set(idx);
-    }
-
-    constexpr void analyze_term(const regex::regex_regular_char& t, size16_t idx)
-    {
-        analyze_base_term(t, idx);
-        
-        for (size_t i = 1; i < std::size(trivial_term_table); ++i)
-        {
-            size_t idx_found = utils::find_char(utils::idx_to_char(i), regex::regex_special_chars::chars);
-            if (idx_found == uninitialized)
-                regex::add_conflicted_term(trivial_term_table[i], idx);
-        }
-        single_char_terms.set(idx);
-    }
-
-    constexpr void analyze_term(const char_term& t, size16_t idx)
-    {
-        analyze_base_term(t, idx);
-
-        regex::add_conflicted_term(trivial_term_table[utils::char_to_idx(t.get_char())], idx);
-        single_char_terms.set(idx);
-    }
-
-    template<typename Term, typename = std::enable_if_t<!Term::is_trivial>>
-    constexpr void analyze_term(const Term& t, size16_t idx)
-    {
-        analyze_base_term(t, idx);
-        trivial_lexical_analyzer = false;
+        if constexpr (Term::is_single_char)
+            single_char_terms.set(idx);
     }
 
     template<typename ValueType>
@@ -2179,22 +2127,6 @@ private:
         return std::get<root_value_type>(ps.value_stack.front());
     }
     
-    template<typename Iterator>
-    constexpr auto get_next_term_trivial(Iterator start, Iterator end) const
-    {
-        auto idx = trivial_term_table[utils::char_to_idx(*start)][0];
-        return regex::recognized_term<Iterator>{ ++start, idx };
-    }
-
-    template<typename ParserState, typename Iterator>
-    constexpr auto get_next_term_dfa(ParserState& ps, Iterator start, Iterator end) const
-    {
-        regex::dfa_match_options opts;
-        opts.set_verbose(ps.options.verbose);
-        opts.sp = ps.current_sp;
-        return regex::dfa_match(lexer_sm, opts, start, end, ps.error_stream);
-    }
-
     template<typename ParserState, typename Iterator>
     constexpr auto get_next_term(ParserState& ps, Iterator start, Iterator end) const
     {
@@ -2203,10 +2135,10 @@ private:
             return regex::recognized_term<Iterator>{ end, eof_idx };
         }
 
-        if (trivial_lexical_analyzer)
-            return get_next_term_trivial(start, end);
-        else
-            return get_next_term_dfa(ps, start, end);
+        regex::dfa_match_options opts;
+        opts.set_verbose(ps.options.verbose);
+        opts.sp = ps.current_sp;
+        return regex::dfa_match(lexer_sm, opts, start, end, ps.error_stream);
     }
 
     template<typename Iterator>
@@ -2238,12 +2170,20 @@ private:
             ps.error_stream << ps.current_sp << "PARSE: Recognized " << term_names[term_idx] << " \n";
     }
 
+    struct no_parser{};
+
     template<size_t... I>
     constexpr void create_lexer(std::index_sequence<I...>)
     {        
         regex::dfa_builder<lexer_dfa_size> b(lexer_sm);
-        auto p = regex::create_regex_parser(b);
-        (void(regex::add_term_data_to_dfa(std::get<I>(term_tuple).get_data(), b, p, I)), ...);
+        constexpr bool trivial_lexer = (true && ... && std::tuple_element_t<I, term_tuple_type>::is_trivial);
+        if constexpr (trivial_lexer)
+            (void(regex::add_term_data_to_dfa(std::get<I>(term_tuple).get_data(), b, no_parser{}, I)), ...);
+        else
+        {
+            auto p = regex::create_regex_parser(b);
+            (void(regex::add_term_data_to_dfa(std::get<I>(term_tuple).get_data(), b, p, I)), ...);
+        }
     }
     
     str_table<term_count> term_names = { };
@@ -2269,8 +2209,6 @@ private:
     associativity term_associativities[term_count] = { associativity::ltor };
     int rule_precedences[rule_count] = { };
     size16_t rule_last_terms[rule_count] = { };
-    regex::conflicted_terms trivial_term_table[meta::distinct_values_count<char>] = { };
-    bool trivial_lexical_analyzer = true;
     term_tuple_type term_tuple;
     nterm_tuple_type nterm_tuple;
     rule_tuple_type rule_tuple;
