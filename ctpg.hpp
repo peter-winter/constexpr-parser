@@ -13,7 +13,7 @@
 namespace ctpg
 {
 
-using size_t = std::uint64_t;
+using size_t = std::size_t;
 using size8_t = std::uint8_t;
 using size16_t = std::uint16_t;
 using size32_t = std::uint32_t;
@@ -577,11 +577,11 @@ public:
     static const size_t pattern_size = std::size(Pattern);
     
     constexpr regex_term(associativity a = associativity::ltor) :
-        term(nullptr, 0, a)
+        term(0, a)
     {}
 
     constexpr regex_term(int precedence = 0, associativity a = associativity::ltor) :
-        term(nullptr, precedence, a)
+        term(precedence, a)
     {}
 
     constexpr regex_term(const char *custom_name, int precedence = 0, associativity a = associativity::ltor) :
