@@ -5,8 +5,6 @@
 #include <string>
 #include <vector>
 #include <map>
-#include <cuchar>
-#include <climits>
 
 using namespace ctpg;
 using namespace ctpg::ftors;
@@ -50,7 +48,7 @@ private:
     type data;
 };
 
-constexpr double to_js_number(std::string_view sv)
+double to_js_number(std::string_view sv)
 {
     auto it = sv.begin();
     auto end = sv.end();
@@ -101,18 +99,23 @@ constexpr double to_js_number(std::string_view sv)
     return result;
 }
 
-constexpr char hex_digits_to_char(char d1, char d2)
+std::uint32_t hex_digits_to_codepoint(std::string_view sv)
 {
-    auto dd = [](char d)
+    auto f = [](char d) -> std::uint32_t
     { 
         if (d >= 'A' && d <= 'F')
-            return 10 + d - 'A';
+            return std::uint32_t(10 + d - 'A');
         else if (d >= 'a' && d <= 'f') 
-            return 10 + d - 'a';
+            return std::uint32_t(10 + d - 'a');
         else
-            return d - '0';
+            return std::uint32_t(d - '0');
     };
-    return dd(d1) * 16 + dd(d2);
+    return (f(sv[0]) << 12) | (f(sv[1]) << 8) | (f(sv[2]) << 4 )| f(sv[3]);
+}
+
+void invalid_unicode_sequence()
+{
+    throw std::runtime_error("invalid string: surrogate [\\ud800-\\udbff] must be followed by [\\udc00-\\udfff]");
 }
 
 std::string to_js_string(std::string_view sv)
@@ -127,16 +130,45 @@ std::string to_js_string(std::string_view sv)
             if (c == 'u')
             {
                 ++i;
-                char arr[2] = { 
-                    hex_digits_to_char(sv[i + 2], sv[i + 3]),
-                    hex_digits_to_char(sv[i], sv[i + 1])
-                };
-                std::mbstate_t state{};
-                char out[MB_LEN_MAX]{};
-                char16_t c16 = *((char16_t*)arr);
-                std::size_t len = std::c16rtomb(out, c16, &state);
-                str.append(out, len);
+                std::uint32_t cp = hex_digits_to_codepoint(sv.substr(i));
                 i += 4;
+                if (cp >= 0xd800 && cp <= 0xdbff)
+                {
+                    if (sv[i] == '\\' && sv[++i] == 'u')
+                    {
+                        ++i;
+                        std::uint32_t cp2 = hex_digits_to_codepoint(sv.substr(i));
+                        i += 4;
+                        if (cp2 >= 0xdc00 && cp2 <= 0xdfff)
+                        {
+                            cp = (cp << 10) + cp2 - 0x35fdc00u;
+                        }
+                        else
+                            invalid_unicode_sequence();
+                    }
+                    else
+                        invalid_unicode_sequence();
+                }
+                if (cp <= 0x80)
+                    str.append(1, char(cp));
+                else if (cp <= 0x7ff)
+                {
+                    str.append(1, char((cp >> 6) | 0xc0));
+                    str.append(1, char((cp & 0x3f) | 0x80));
+                }
+                else if (cp <= 0xffff)
+                {
+                    str.append(1, char((cp >> 12) | 0xe0));
+                    str.append(1, char(((cp >> 6) & 0x3f) | 0x80));
+                    str.append(1, char((cp & 0x3f) | 0x80));
+                }
+                else
+                {
+                    str.append(1, char((cp >> 18) | 0xf0));
+                    str.append(1, char(((cp >> 12) & 0x3f) | 0x80));
+                    str.append(1, char(((cp >> 6) & 0x3f) | 0x80));
+                    str.append(1, char((cp & 0x3f) | 0x80));
+                }
             }
             else
             {
@@ -261,6 +293,5 @@ int main(int argc, char* argv[])
         buffers::string_buffer(argv[1]), 
         std::cout);
 
-    std::cout << res.value().at("key").as_string() << std::endl;
     return 0;
 }
