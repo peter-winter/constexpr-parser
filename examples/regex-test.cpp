@@ -6,14 +6,15 @@
 using namespace ctpg;
 
 
-constexpr char pattern[] = "[1-9]+";
+constexpr char pattern[] = "-";
 constexpr regex::expr<pattern> r;
 
-constexpr bool m = r.match("123");
+
 
 int main()
 {
     r.write_diag_str(std::cout);
+    bool m = r.match("-", std::cout);
     std::cout << (m ? "Matched" : "Fail") << std::endl;
 
     regex::dfa_size_analyzer a;

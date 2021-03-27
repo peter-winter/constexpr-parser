@@ -1158,6 +1158,14 @@ namespace regex
             return res.term_idx == 0 && res.it == buf.end();
         }
 
+        template<size_t N1, typename Stream>
+        constexpr bool match(const char(&str)[N1], Stream& s) const
+        {
+            buffers::cstring_buffer buf(str);
+            auto res = dfa_match(sm, dfa_match_options{}.set_verbose(), buf.begin(), buf.end(), s);
+            return res.term_idx == 0 && res.it == buf.end();
+        }
+
         template<typename Stream>
         constexpr void write_diag_str(Stream& stream) const
         {
@@ -1694,6 +1702,14 @@ private:
         return 0;
     }
 
+    constexpr associativity calculate_rule_associativity(size16_t rule_idx, size16_t rule_size) const
+    {
+        size16_t last_term_idx = rule_last_terms[rule_idx];
+        if (last_term_idx != uninitialized16)
+            return term_associativities[last_term_idx];
+        return associativity::ltor;
+    }
+
     template<typename T>
     using value_type_t = typename T::value_type;
 
@@ -1706,6 +1722,7 @@ private:
         rule_infos[Nr] = { l_idx, size16_t(Nr), rule_elements_count };
         rule_last_terms[Nr] = calculate_rule_last_term(Nr, rule_elements_count);
         rule_precedences[Nr] = calculate_rule_precedence(r.get_precedence(), Nr, rule_elements_count);
+        rule_associativities[Nr] = calculate_rule_associativity(Nr, rule_elements_count);
         if constexpr (Nr != root_rule_idx)
         {
             value_reductors[Nr] = &reduce_value<Nr, F, value_type_t<L>, value_type_t<R>...>;
@@ -1887,8 +1904,7 @@ private:
 
         if (r_p == t_p)
         {
-            size16_t last_term_idx = rule_last_terms[rule_idx];
-            if (term_associativities[last_term_idx] == associativity::ltor)
+            if (rule_associativities[rule_idx] == associativity::ltor)
                 return parse_table_entry_kind::reduce;
         }
         return parse_table_entry_kind::shift;
@@ -2029,12 +2045,12 @@ private:
             s << "On " << term_names[term_idx];
             if (entry.kind == parse_table_entry_kind::success)
                 s << " success \n";
-            else if (entry.kind == parse_table_entry_kind::shift)
-                s << " shift to " << entry.shift << "\n";
             else if (entry.kind == parse_table_entry_kind::reduce && entry.has_shift)
                 s << " shift to " << entry.shift << " S/R CONFLICT, prefer reduce(" << rule_infos[entry.reduce].r_idx << ") over shift\n";
             else if (entry.kind == parse_table_entry_kind::shift && entry.has_reduce)
                 s << " shift to " << entry.shift << " S/R CONFLICT, prefer shift over reduce(" << rule_infos[entry.reduce].r_idx << ")\n";
+            else if (entry.kind == parse_table_entry_kind::shift)
+                s << " shift to " << entry.shift << "\n";
             else if (entry.kind == parse_table_entry_kind::reduce)
                 s << " reduce using (" << rule_infos[entry.reduce].r_idx << ")\n";
             else if (entry.kind == parse_table_entry_kind::rr_conflict)
@@ -2204,8 +2220,9 @@ private:
     situation_queue_entry situation_queue[max_states * rule_count + max_states] = { };
     size32_t situation_queue_size = 0;
     int term_precedences[term_count] = { };
-    associativity term_associativities[term_count] = { associativity::ltor };
+    associativity term_associativities[term_count] = { };
     int rule_precedences[rule_count] = { };
+    associativity rule_associativities[rule_count] = { };
     size16_t rule_last_terms[rule_count] = { };
     term_tuple_type term_tuple;
     nterm_tuple_type nterm_tuple;
@@ -2332,16 +2349,19 @@ namespace regex
         constexpr nterm<char_subset> c_subset("c_subset");
         constexpr nterm<char_range> c_subset_item("c_subset_item");
         constexpr nterm<char_range> c_range("c_range");
-        constexpr nterm<char> single_char("single_char");    
+        constexpr nterm<char> single_char("single_char");
+        
+        constexpr char_term dash('-', 1);
 
         return parser(
             expr,
-            terms(regex_regular_char{}, regex_hex_digit{}, 'x', '\\', '[', ']', '^', '-', '.', '*', '+', '?', '|', '(', ')'),
+            terms(regex_regular_char{}, regex_hex_digit{}, 'x', '\\', '[', ']', '^', dash, '.', '*', '+', '?', '|', '(', ')'),
             nterms(expr, alt, concat, q_expr, primary, c_range, c_subset, c_subset_item, single_char),
             rules(
                 single_char(regex_regular_char{}),
                 single_char(regex_hex_digit{}),
                 single_char('x'),
+                single_char(dash),
                 single_char('\\', '\\') >= _e2,
                 single_char('\\', '[') >= _e2,
                 single_char('\\', ']') >= _e2,
@@ -2355,7 +2375,7 @@ namespace regex
                 single_char('\\', '(') >= _e2,
                 single_char('\\', ')') >= _e2,
                 single_char('\\', 'x', regex_hex_digit{}, regex_hex_digit{}) >= [](skip, skip, char d1, char d2){ return hex_digits_to_char(d1, d2); },
-                c_range(single_char, '-', single_char) >= [](char c1, skip, char c2){ return char_range(c1, c2); },
+                c_range(single_char, dash, single_char) >= [](char c1, skip, char c2){ return char_range(c1, c2); },
                 c_subset_item(single_char) >= [](char c) { return char_range(c); },
                 c_subset_item(c_range),
                 c_subset(c_subset_item) >= [](char_range r){ return char_subset(r); },
