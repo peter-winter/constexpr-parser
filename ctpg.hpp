@@ -350,10 +350,8 @@ namespace utils
 
     constexpr bool str_equal(const char* str1, const char* str2)
     {
-        if (str1 == str2)
-            return true;
-        if ((str1 == nullptr) ^ (str2 == nullptr))
-            return false;
+        if ((str1 == nullptr) || (str2 == nullptr))
+            throw std::runtime_error("null pointers not allowed here");
         while (*str1 == *str2)
         {
             if (*str1 == 0)
