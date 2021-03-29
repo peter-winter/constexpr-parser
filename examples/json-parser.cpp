@@ -224,7 +224,7 @@ auto&& add_object_element(js_object_element_type&& e, js_object_type&& ob)
 }
 
 constexpr char number_pattern[] = R"_(\-?(0|[1-9][0-9]*)(\.[0-9]*)?((e|E)(\+|\-)[0-9]*)?)_";
-constexpr char string_pattern[] = R"_("([^\\"\x00-\x1F]|\\[\\"/bfnrt]|\\u[0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f])*")_";
+constexpr char string_pattern[] = R"_("([^\\"\x00-\x1F]|\\[\\"/bfnrt]|\\u[0-9A-Fa-f]{4})*")_";
 constexpr char true_pattern[] = "true";
 constexpr char false_pattern[] = "false";
 constexpr char null_pattern[] = "null";

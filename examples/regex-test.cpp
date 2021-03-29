@@ -6,7 +6,7 @@
 using namespace ctpg;
 
 
-constexpr char pattern[] = "-";
+constexpr char pattern[] = "bba{3}";
 constexpr regex::expr<pattern> r;
 
 
@@ -14,7 +14,7 @@ constexpr regex::expr<pattern> r;
 int main()
 {
     r.write_diag_str(std::cout);
-    bool m = r.match("-", std::cout);
+    bool m = r.match("bbaaa", std::cout);
     std::cout << (m ? "Matched" : "Fail") << std::endl;
 
     regex::dfa_size_analyzer a;
