@@ -42,10 +42,10 @@ constexpr int get_int(std::string_view sv)
 
 constexpr nterm<int> expr("expr");
 
-constexpr char_term o_plus('+', 1);
-constexpr char_term o_minus('-', 1);
-constexpr char_term o_mul('*', 2);
-constexpr char_term o_div('/', 2);
+constexpr char_term o_plus('+', 1, associativity::ltor);
+constexpr char_term o_minus('-', 1, associativity::ltor);
+constexpr char_term o_mul('*', 2, associativity::ltor);
+constexpr char_term o_div('/', 2, associativity::ltor);
 
 constexpr char number_pattern[] = "[1-9][0-9]*";
 constexpr regex_term<number_pattern> number("number");
@@ -77,7 +77,7 @@ int main()
     std::cout << "Fail case: " << b << std::endl;
 
     std::stringstream ss;
-    auto res = p.parse(parse_options{}.set_verbose(), string_buffer("2 + 2 \n* 2"), ss);
+    auto res = p.parse(parse_options{}.set_verbose(), string_buffer("2 * 5 / 3"), ss);
     int rv = res.value();
     std::cout << "Runtime case: " << rv << std::endl;
     std::cout << "Verbose output: " << std::endl << ss.str();

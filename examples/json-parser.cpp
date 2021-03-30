@@ -223,17 +223,11 @@ auto&& add_object_element(js_object_element_type&& e, js_object_type&& ob)
     return std::move(ob);
 }
 
-constexpr char number_pattern[] = R"_(\-?(0|[1-9][0-9]*)(\.[0-9]*)?((e|E)(\+|\-)[0-9]*)?)_";
+constexpr char number_pattern[] = R"_(\-?(0|[1-9][0-9]*)(\.[0-9]+)?((e|E)(\+|\-)[0-9]+)?)_";
 constexpr char string_pattern[] = R"_("([^\\"\x00-\x1F]|\\[\\"/bfnrt]|\\u[0-9A-Fa-f]{4})*")_";
-constexpr char true_pattern[] = "true";
-constexpr char false_pattern[] = "false";
-constexpr char null_pattern[] = "null";
 
 constexpr regex_term<number_pattern> js_number("js_number");
 constexpr regex_term<string_pattern> js_string("js_string");
-constexpr regex_term<true_pattern> js_true("js_true");
-constexpr regex_term<false_pattern> js_false("js_false");
-constexpr regex_term<null_pattern> js_null("js_null");
 
 constexpr nterm<js_value_type> js_value("js_value");
 constexpr nterm<js_object_type> js_object("js_object");
@@ -245,29 +239,29 @@ constexpr nterm<js_array_type> js_array_elements("js_array_elements");
 
 constexpr parser js_parser(
     js_object,
-    terms(js_number, js_string, js_true, js_false, js_null, '[', ']', ',', '{', '}', ':'),
+    terms(js_number, js_string, "true", "false", "null", '[', ']', ',', '{', '}', ':'),
     nterms(js_object, js_array, js_value, js_array_elements, js_object_elements, js_object_element),
     rules(
         js_value(js_number) 
             >= [](auto sv){ return to_js_number(sv); },
         js_value(js_string) 
             >= [](auto sv){ return to_js_string(sv); },
-        js_value(js_true) 
-            >= [](skip){ return true; },
-        js_value(js_false) 
-            >= [](skip){ return false; },
-        js_value(js_null) 
-            >= [](skip){ return nullptr; },
+        js_value("true") 
+            >= val(true),
+        js_value("false") 
+            >= val(false),
+        js_value("null") 
+            >= val(nullptr),
         js_value(js_array),
         js_value(js_object),
         js_array('[', js_array_elements, ']') 
             >= _e2,
         js_array('[', ']') 
-            >= [](skip, skip) { return js_array_type(); },
+            >= create<js_array_type>{},
         js_object('{', js_object_elements, '}')
             >= _e2,
         js_object('{', '}')
-            >= [](skip, skip) { return js_object_type(); },
+            >= create<js_object_type>{},
         js_array_elements(js_value) 
             >= [](auto&& v) { return to_array(std::move(v)); },
         js_array_elements(js_array_elements, ',', js_value) 

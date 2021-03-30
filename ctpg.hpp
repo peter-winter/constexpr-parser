@@ -494,7 +494,7 @@ private:
     const char* name;
 };
 
-enum class associativity { ltor, rtol };
+enum class associativity { no_assoc, ltor, rtol };
 
 struct source_point
 {
@@ -547,7 +547,7 @@ private:
 class term
 {
 public:
-    constexpr term(int precedence = 0, associativity a = associativity::ltor) :
+    constexpr term(int precedence = 0, associativity a = associativity::no_assoc) :
         precedence(precedence), ass(a)
     {}
 
@@ -582,15 +582,15 @@ public:
     
     static const size_t pattern_size = std::size(Pattern);
     
-    constexpr regex_term(associativity a = associativity::ltor) :
+    constexpr regex_term(associativity a = associativity::no_assoc) :
         term(0, a)
     {}
 
-    constexpr regex_term(int precedence = 0, associativity a = associativity::ltor) :
+    constexpr regex_term(int precedence = 0, associativity a = associativity::no_assoc) :
         term(precedence, a)
     {}
 
-    constexpr regex_term(const char *custom_name, int precedence = 0, associativity a = associativity::ltor) :
+    constexpr regex_term(const char *custom_name, int precedence = 0, associativity a = associativity::no_assoc) :
         term(precedence, a),
         custom_name(custom_name)
     {
@@ -616,7 +616,7 @@ public:
     static const bool is_single_char = true;
     static const bool is_trivial = true;
 
-    constexpr char_term(char c, int precedence = 0, associativity a = associativity::ltor):
+    constexpr char_term(char c, int precedence = 0, associativity a = associativity::no_assoc):
         term(precedence, a), c(c)
     {
         utils::copy_array(id, utils::c_names.name(c), std::make_index_sequence<utils::char_names::name_size>{});
@@ -642,7 +642,7 @@ public:
     static const bool is_trivial = true;
 
     template<size_t N>
-    constexpr string_term(const char (&str)[N], int precedence = 0, associativity a = associativity::ltor):
+    constexpr string_term(const char (&str)[N], int precedence = 0, associativity a = associativity::no_assoc):
         term(precedence, a)
     {
         utils::copy_array(data, str, std::make_index_sequence<N>{});
@@ -861,7 +861,7 @@ namespace regex
         {
             for (size_t i = 0; i < n - 1; ++i)
             {
-                for (size_t j = s.start; j < s.n; ++j)
+                for (size_t j = s.start; j < s.start + s.n; ++j)
                 {
                     sm.push_back(sm[j]);
                     auto& st = sm.back();
@@ -1147,7 +1147,7 @@ namespace regex
 
             if (options.verbose)
             {
-                error_stream << options.sp << "REGEX MATCH: Current char " << *start << "\n";
+                error_stream << options.sp << "REGEX MATCH: Current char " << utils::c_names.name(*start) << "\n";
                 error_stream << options.sp << "REGEX MATCH: New state " << state_idx << "\n";
             }
             it_prev = start;
@@ -1706,7 +1706,7 @@ private:
         term_names[eof_idx] = detail::eof::get_name();
         term_ids[eof_idx] = detail::eof::get_name();
         term_precedences[eof_idx] = 0;
-        term_associativities[eof_idx] = associativity::ltor;
+        term_associativities[eof_idx] = associativity::no_assoc;
     }
 
     template<typename Term>
@@ -1808,7 +1808,7 @@ private:
         size16_t last_term_idx = rule_last_terms[rule_idx];
         if (last_term_idx != uninitialized16)
             return term_associativities[last_term_idx];
-        return associativity::ltor;
+        return associativity::no_assoc;
     }
 
     template<typename T>
@@ -2413,10 +2413,10 @@ namespace ftors
     constexpr element<9> _e9;
 
     template<typename T>
-    class ret
+    class val
     {
     public:
-        constexpr ret(T&& v):
+        constexpr val(T&& v):
             v(std::forward<T>(v))
         {}
 
@@ -2431,7 +2431,18 @@ namespace ftors
     };
 
     template<typename T>
-    ret(T&&) -> ret<std::decay_t<T>>;    
+    val(T&&) -> val<std::decay_t<T>>;    
+
+    template<typename T>
+    class create
+    {
+    public:
+        template<typename... Args>
+        constexpr auto operator ()(Args&&...) const
+        {
+            return T{};
+        }
+    };
 }
 
 namespace regex
@@ -2454,12 +2465,10 @@ namespace regex
         constexpr nterm<char> regex_hex_digit("regex_hex_digit");
         constexpr nterm<size32_t> number("number");
         
-        constexpr char_term dash('-', 1);
-
         return parser(
             expr,
             terms(regex_regular_char{}, regex_digit_af{}, regex_digit_09{},
-                'x', '\\', '[', ']', "[^", dash, '.', '*', '+', '?', '|', '(', ')', '{', '}'
+                'x', '\\', '[', ']', "[^", '-', '.', '*', '+', '?', '|', '(', ')', '{', '}'
             ),
             nterms(expr, alt, concat, q_expr, primary, c_range, c_subset, c_subset_item, single_char, regex_hex_digit, number),
             rules(
@@ -2470,7 +2479,7 @@ namespace regex
                 single_char(regex_regular_char{}),
                 single_char(regex_hex_digit),
                 single_char('x'),
-                single_char(dash),
+                single_char('-'),
                 single_char('\\', regex_regular_char{}) >= _e2,
                 single_char('\\', regex_hex_digit) >= _e2,
                 single_char('\\', '\\') >= _e2,
@@ -2486,9 +2495,10 @@ namespace regex
                 single_char('\\', ')') >= _e2,
                 single_char('\\', '{') >= _e2,
                 single_char('\\', '}') >= _e2,
+                single_char('\\', 'x') >= val('\0'),
                 single_char('\\', 'x', regex_hex_digit) >= [](skip, skip, char d2){ return hex_digits_to_char(0, d2); },
                 single_char('\\', 'x', regex_hex_digit, regex_hex_digit) >= [](skip, skip, char d1, char d2){ return hex_digits_to_char(d1, d2); },
-                c_range(single_char, dash, single_char) >= [](char c1, skip, char c2){ return char_range(c1, c2); },
+                c_range(single_char, '-', single_char) >= [](char c1, skip, char c2){ return char_range(c1, c2); },
                 c_subset_item(single_char) >= [](char c) { return char_range(c); },
                 c_subset_item(c_range),
                 c_subset(c_subset_item) >= [](char_range r){ return char_subset(r); },
