@@ -777,9 +777,16 @@ namespace regex
         constexpr slice star(slice s) { return s; }
         constexpr slice plus(slice s) { return s; }
         constexpr slice opt(slice s) { return s; }
-        constexpr slice rep(slice s, size32_t n) { size += (s.n * (n - 1)); return slice{ s.start, s.n * n }; }
         constexpr slice cat(slice s1, slice s2) { return add(s1, s2); }
         constexpr slice alt(slice s1, slice s2) { return add(s1, s2); }
+        
+        constexpr slice rep(slice s, size32_t n)
+        { 
+            if (n == 0)
+                return s;
+            size += (s.n * (n - 1)); 
+            return slice{ s.start, s.n * n }; 
+        }
 
     private:
         constexpr slice prim() { auto old = size; size += 2; return slice{ old, 2 }; }
@@ -865,7 +872,7 @@ namespace regex
                 {
                     if (sm[j].start_state)
                     {
-                        for (auto& t : st.transitions)
+                        for (auto& t : sm[j].transitions)
                             t = uninitialized16;
                         sm[j].end_state = 1;
                         sm[j].start_state = 0;
@@ -1119,24 +1126,24 @@ namespace regex
         return res.value().n;
     }
 
-    struct dfa_match_options
+    struct match_options
     {
         bool verbose = false;
         source_point sp;
-        constexpr dfa_match_options& set_verbose(bool val = true) { verbose = val; return *this; }
+        constexpr match_options& set_verbose(bool val = true) { verbose = val; return *this; }
     };
 
     template<size_t N, typename Iterator, typename ErrorStream>
     constexpr auto dfa_match(
         const dfa<N>& sm, 
-        dfa_match_options options, 
+        match_options options, 
         Iterator start, 
         Iterator end, 
         ErrorStream& error_stream)
     {
         size16_t state_idx = 0;
         Iterator it_prev = start;
-        recognized_term<Iterator> rt{ end, uninitialized16 };
+        recognized_term<Iterator> rt{ start, uninitialized16 };
         while (true)
         {
             const dfa_state& state = sm[state_idx];
@@ -1158,7 +1165,11 @@ namespace regex
             
             size16_t tr = state.transitions[utils::char_to_idx(*start)];
             if (tr == uninitialized16)
+            {
+                if (rt.term_idx == uninitialized16)
+                    rt.it = start;
                 break;
+            }
 
             state_idx = tr;
 
@@ -1261,21 +1272,39 @@ namespace regex
             b.mark_end_states(s.value(), 0);
         }
 
-        template<size_t N1>
-        constexpr bool match(const char(&str)[N1]) const
+        template<size_t N>
+        constexpr bool match(const char (&str)[N]) const
         {
-            buffers::cstring_buffer buf(str);
-            detail::no_stream error_stream;
-            auto res = dfa_match(sm, dfa_match_options{}, buf.begin(), buf.end(), error_stream);
-            return res.term_idx == 0 && res.it == buf.end();
+            return match(buffers::cstring_buffer(str));
         }
 
-        template<size_t N1, typename Stream>
-        constexpr bool match(const char(&str)[N1], Stream& s) const
+        template<typename Buffer>
+        constexpr bool match(const Buffer& buf) const
         {
-            buffers::cstring_buffer buf(str);
-            auto res = dfa_match(sm, dfa_match_options{}.set_verbose(), buf.begin(), buf.end(), s);
-            return res.term_idx == 0 && res.it == buf.end();
+            detail::no_stream s;
+            return match(buf, s);
+        }
+
+        template<typename Buffer, typename Stream>
+        constexpr bool match(const Buffer& buf, Stream& s) const
+        {
+            return match(buf, match_options{}, s);
+        }
+
+        template<typename Buffer, typename Stream>
+        constexpr bool match(const Buffer& buf, match_options opts, Stream& s) const
+        {
+            auto res = dfa_match(sm, opts, buf.begin(), buf.end(), s);
+            if (res.term_idx == 0 && res.it == buf.end())
+                return true;
+            else
+            {
+                if (res.term_idx == 0)
+                    s << "Leftover text after recognition: " << buf.get_view(res.it, buf.end()) << "\n";
+                else
+                    s << "Unexpected char: " << utils::c_names.name(*res.it) << "\n";
+                return false;
+            }
         }
 
         template<typename Stream>
@@ -2267,7 +2296,7 @@ private:
             return regex::recognized_term<Iterator>{ end, eof_idx };
         }
 
-        regex::dfa_match_options opts;
+        regex::match_options opts;
         opts.set_verbose(ps.options.verbose);
         opts.sp = ps.current_sp;
         return regex::dfa_match(lexer_sm, opts, start, end, ps.error_stream);

@@ -73,14 +73,14 @@ constexpr bool b = res_fail.has_value();
 
 int main()
 {
-    std::cout << "Success case: " << v << std::endl;
-    std::cout << "Fail case: " << b << std::endl;
+    std::cout << "constexpr parse: " << v << std::endl;
+    static_assert(b == false);
 
     std::stringstream ss;
-    auto res = p.parse(parse_options{}.set_verbose(), string_buffer("2 * 5 / 3"), ss);
+    auto res = p.parse(parse_options{}.set_verbose(), string_buffer("2 * 5 + 3"), ss);
     int rv = res.value();
-    std::cout << "Runtime case: " << rv << std::endl;
-    std::cout << "Verbose output: " << std::endl << ss.str();
+    std::cout << "runtime parse: " << rv << std::endl;
+    std::cout << "verbose output: " << std::endl << ss.str();
     return 0;
 }
 
