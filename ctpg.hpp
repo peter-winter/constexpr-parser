@@ -522,7 +522,7 @@ struct source_point
 
 std::ostream& operator << (std::ostream& o, const source_point& sp)
 {
-    o << "[" << sp.line << ":" << sp.column << "]: ";
+    o << "[" << sp.line << ":" << sp.column << "]";
     return o;
 }
 
@@ -530,14 +530,15 @@ template<typename VT>
 class term_value
 {
 public:
-    constexpr term_value(VT v, size32_t line, size32_t column):
-        value(v), sp{ line, column }
+    constexpr term_value(VT v, source_point sp):
+        value(v), sp{ sp }
     {}
 
     constexpr operator VT() const { return value; }
     constexpr size32_t get_line() const { return sp.line; }
     constexpr size32_t get_column() const { return sp.column; }
     constexpr const VT& get_value() const { return value; }
+    constexpr source_point get_sp() const { return sp; }
 
 private:
     VT value;
@@ -1155,7 +1156,7 @@ namespace regex
 
                 if (options.verbose)
                 {
-                    error_stream << options.sp << "REGEX MATCH: Recognized " << rec_idx << "\n";
+                    error_stream << options.sp << " REGEX MATCH: Recognized " << rec_idx << "\n";
                 }
             }
             options.sp.update(it_prev, start);
@@ -1175,8 +1176,8 @@ namespace regex
 
             if (options.verbose)
             {
-                error_stream << options.sp << "REGEX MATCH: Current char " << utils::c_names.name(*start) << "\n";
-                error_stream << options.sp << "REGEX MATCH: New state " << state_idx << "\n";
+                error_stream << options.sp << " REGEX MATCH: Current char " << utils::c_names.name(*start) << "\n";
+                error_stream << options.sp << " REGEX MATCH: New state " << state_idx << "\n";
             }
             it_prev = start;
             ++start;
@@ -1288,11 +1289,11 @@ namespace regex
         template<typename Buffer, typename Stream>
         constexpr bool match(const Buffer& buf, Stream& s) const
         {
-            return match(buf, match_options{}, s);
+            return match(match_options{}, buf, s);
         }
 
         template<typename Buffer, typename Stream>
-        constexpr bool match(const Buffer& buf, match_options opts, Stream& s) const
+        constexpr bool match(match_options opts, const Buffer& buf, Stream& s) const
         {
             auto res = dfa_match(sm, opts, buf.begin(), buf.end(), s);
             if (res.term_idx == 0 && res.it == buf.end())
@@ -2226,13 +2227,13 @@ private:
     constexpr void shift(ParserState& ps, const std::string_view& sv, size16_t term_idx, size16_t new_cursor_value) const
     {
         if (ps.options.verbose)
-            ps.error_stream << ps.current_sp << "PARSE: Shift to " << new_cursor_value << ", term: " << sv << "\n";
+            ps.error_stream << ps.current_sp << " PARSE: Shift to " << new_cursor_value << ", term: " << sv << "\n";
         ps.cursor_stack.push_back(new_cursor_value);
         
         if (single_char_terms.test(term_idx))
-            ps.value_stack.emplace_back(term_value<char>(sv[0], 12, 13));
+            ps.value_stack.emplace_back(term_value<char>(sv[0], ps.current_sp));
         else
-            ps.value_stack.emplace_back(term_value<std::string_view>(sv, 12, 13));
+            ps.value_stack.emplace_back(term_value<std::string_view>(sv, ps.current_sp));
     }
 
     template<typename ParserState>
@@ -2241,7 +2242,7 @@ private:
         const auto& ri = rule_infos[rule_info_idx];
         if (ps.options.verbose)
         {
-            ps.error_stream << ps.current_sp << "PARSE: Reduced using rule " << ri.r_idx << "  ";
+            ps.error_stream << ps.current_sp << " PARSE: Reduced using rule " << ri.r_idx << "  ";
             write_rule_diag_str(ps.error_stream, rule_info_idx);
             ps.error_stream << "\n";
         }
@@ -2251,7 +2252,7 @@ private:
         
         if (ps.options.verbose)
         {
-            ps.error_stream << ps.current_sp << "PARSE: Go to " << new_cursor_value << "\n";
+            ps.error_stream << ps.current_sp << " PARSE: Go to " << new_cursor_value << "\n";
         }
 
         ps.cursor_stack.push_back(new_cursor_value);
@@ -2266,7 +2267,7 @@ private:
     {
         if (ps.options.verbose)
         {
-            ps.error_stream << ps.current_sp << "PARSE: R/R conflict encountered \n";
+            ps.error_stream << ps.current_sp << " PARSE: R/R conflict encountered \n";
         }
         reduce(ps, rule_idx);
     }
@@ -2274,7 +2275,7 @@ private:
     template<typename ParserState>
     constexpr void syntax_error(ParserState& ps, size16_t term_idx) const
     {
-        ps.error_stream << ps.current_sp << "PARSE: Syntax error: " << 
+        ps.error_stream << ps.current_sp << " PARSE: Syntax error: " << 
             "Unexpected '" << term_names[term_idx] << "'" << "\n";
     }
 
@@ -2283,7 +2284,7 @@ private:
     {
         if (ps.options.verbose)
         {
-            ps.error_stream << ps.current_sp << "PARSE: Success \n";
+            ps.error_stream << ps.current_sp << " PARSE: Success \n";
         }
         return std::get<root_value_type>(ps.value_stack.front());
     }
@@ -2321,14 +2322,14 @@ private:
     template<typename ParserState>
     constexpr void unexpected_char(ParserState& ps, char c) const
     {
-        ps.error_stream << ps.current_sp << "PARSE: Unexpected character: " << c << "\n";
+        ps.error_stream << ps.current_sp << " PARSE: Unexpected character: " << c << "\n";
     }
 
     template<typename ParserState>
     constexpr void trace_recognized_term(ParserState& ps, size16_t term_idx) const
     {
         if (ps.options.verbose)
-            ps.error_stream << ps.current_sp << "PARSE: Recognized " << term_names[term_idx] << " \n";
+            ps.error_stream << ps.current_sp << " PARSE: Recognized " << term_names[term_idx] << " \n";
     }
 
     struct no_parser{};

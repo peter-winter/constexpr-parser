@@ -16,7 +16,7 @@ int main(int argc, char* argv[])
         std::cout << (m ? "constexpr match" : "constexpr match fail") << std::endl;
         return 0;
     }
-    bool m = r.match(buffers::string_buffer(argv[1]), regex::match_options{}.set_verbose(), std::cout);
+    bool m = r.match(regex::match_options{}.set_verbose(), buffers::string_buffer(argv[1]), std::cout);
     std::cout << (m ? "runtime match" : "runtime match fail") << std::endl;
     return 0;
 }
