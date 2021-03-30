@@ -6,7 +6,7 @@
 using namespace ctpg;
 
 
-constexpr char pattern[] = "\\x2";
+constexpr char pattern[] = "a{0}";
 constexpr regex::expr<pattern> r;
 
 

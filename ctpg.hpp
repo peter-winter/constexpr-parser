@@ -687,9 +687,9 @@ namespace regex
                 t = uninitialized16;
         }
 
-        size8_t start_state = false;
-        size8_t end_state = false;
-        size8_t unreachable = false;
+        size8_t start_state = 0;
+        size8_t end_state = 0;
+        size8_t unreachable = 0;
         conflicted_terms conflicted_recognition = { uninitialized16, uninitialized16, uninitialized16, uninitialized16 };
         static const size_t transitions_size = meta::distinct_values_count<char>;
         size16_t transitions[transitions_size] = {};
@@ -859,6 +859,23 @@ namespace regex
 
         constexpr slice rep(slice s, size32_t n)
         {
+            if (n == 0)
+            {
+                for (size_t j = s.start; j < s.start + s.n; ++j)
+                {
+                    if (sm[j].start_state)
+                    {
+                        for (auto& t : st.transitions)
+                            t = uninitialized16;
+                        sm[j].end_state = 1;
+                        sm[j].start_state = 0;
+                    }
+                    else
+                        sm[j].unreachable = 1;
+                }
+                return s;
+            }
+
             for (size_t i = 0; i < n - 1; ++i)
             {
                 for (size_t j = s.start; j < s.start + s.n; ++j)
