@@ -56,10 +56,10 @@ int main(int argc, char* argv[])
 Compile and run:
 
 ```sh
-g++ readme_example.cpp -std=c++17 -o example && example "1, 2, 3"
+g++ readme_example.cpp -std=c++17 -o example && example "10, 20, 30"
 ```
 
-You should see the output : 6. If incorrect text supplied as an argument:
+You should see the output : 60. If incorrect text supplied as an argument:
 
 ```sh
 g++ readme_example.cpp -std=c++17 -o example && example "1, 2, 3x"
@@ -92,7 +92,7 @@ int main(int argc, char* argv[])
 {
     if (argc < 2)
     {
-        constexpr char example_text[] = "1, 2, 3";
+        constexpr char example_text[] = "1, 20, 3";
         constexpr auto cres = p.parse(cstring_buffer(example_text));
         std::cout << cres.value() << std::endl;
         return 0;
@@ -106,12 +106,12 @@ int main(int argc, char* argv[])
 }
 ```
 
-Now when no argument specified it prints the compile time result of parsing "1, 2, 3". 
+Now when no argument specified it prints the compile time result of parsing "1, 20, 3". 
 
 ```sh
 g++ readme_example.cpp -std=c++17 -o example && example
 ```
-should print the number 6.
+should print the number 24.
 
 #### Invalid input in _constexpr_ parsing
 If the ```example_text``` variable was an invalid input, the code ```cres.value()```
