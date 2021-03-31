@@ -58,3 +58,14 @@ Compile and run:
 ```sh
 g++ readme_example.cpp -std=c++17 -o example && example "1, 2, 3"
 ```
+
+You should see the output : 6
+If incorrect text supplied as an argument:
+
+```sh
+g++ readme_example.cpp -std=c++17 -o example && example "1, 2, 3x"
+```
+you should see:
+```
+[1:8] PARSE: Unexpected character: x
+```
