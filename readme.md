@@ -1,7 +1,7 @@
 # CTPG
 ## _C++ Compile Time Parser Generator_
 
-C++ _**single header only**_ library which takes a language description as a C++ code and turns it into a LR1 table parser with a deterministic finite automaton lexical analyzer, all in compile time.
+C++ _**single header**_ library which takes a language description as a C++ code and turns it into a LR1 table parser with a deterministic finite automaton lexical analyzer, all in compile time.
 What's more, the generated parser is actually itself capable of parsing in compile time.
 All it needs is a C++17 compiler!
 
