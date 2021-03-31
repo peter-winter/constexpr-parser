@@ -23,9 +23,9 @@ constexpr parser p(
     nterms(list),
     rules(
         list(number) 
-            >= [](const auto& sv) { return to_int(sv); },
+            >= [](const auto& n) { return to_int(n); },
         list(list, ',', number) 
-            >= [](int sum, char, const auto& sv){ return sum + to_int(sv); }
+            >= [](int sum, char, const auto& n){ return sum + to_int(n); }
     )
 );
 
