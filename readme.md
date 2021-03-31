@@ -106,12 +106,13 @@ int main(int argc, char* argv[])
 }
 ```
 
-Now when no argument specified it prints the compile time result of parsing "1, 2, 3". It is 6, btw.
+Now when no argument specified it prints the compile time result of parsing "1, 2, 3". 
 
 ```sh
 g++ readme_example.cpp -std=c++17 -o example && example
 ```
 should print the number 6.
+
 If the ```example_text``` variable was an invalid input, the code ```cres.value()```
 would throw, because the ```cres``` is of type ```std::optional<int>``` with no value.
 
