@@ -59,8 +59,7 @@ Compile and run:
 g++ readme_example.cpp -std=c++17 -o example && example "1, 2, 3"
 ```
 
-You should see the output : 6
-If incorrect text supplied as an argument:
+You should see the output : 6. If incorrect text supplied as an argument:
 
 ```sh
 g++ readme_example.cpp -std=c++17 -o example && example "1, 2, 3x"
@@ -69,3 +68,56 @@ you should see:
 ```
 [1:8] PARSE: Unexpected character: x
 ```
+
+### Compile time  parsing
+
+Above code can be easily changed to create an actual constexpr parser.
+Change the ```to_int``` function to:
+
+```c++
+constexpr int to_int(const std::string_view& sv)
+{
+    int sum = 0;
+    for (auto c : sv) { sum *= 10; sum += c - '0'; }
+    return sum;
+}
+```
+
+The function is now _constexpr_.
+
+Also change the _main_ to:
+
+```c++
+int main(int argc, char* argv[])
+{
+    if (argc < 2)
+    {
+        constexpr char example_text[] = "1, 2, 3";
+        constexpr auto cres = p.parse(cstring_buffer(example_text));
+        std::cout << cres.value() << std::endl;
+        return 0;
+    }
+        
+    auto res = p.parse(string_buffer(argv[1]), std::cerr);
+    bool success = res.has_value();
+    if (success)
+        std::cout << res.value() << std::endl;
+    return success ? 0 : -1;
+}
+```
+
+Now when no argument specified it prints the compile time result of parsing "1, 2, 3". It is 6, btw.
+
+```sh
+g++ readme_example.cpp -std=c++17 -o example && example
+```
+should print the number 6.
+If the ```example_text``` variable was an invalid input, the code ```cres.value()```
+would throw, because the ```cres``` is of type ```std::optional<int>``` with no value.
+
+
+Changing the ```parse``` call to:
+```
+constexpr int cres = p.parse(cstring_buffer(example_text)).value();
+```
+would cause compilation error, because throwing ```std::bad_optional_access``` is not _constexpr_.
