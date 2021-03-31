@@ -33,8 +33,9 @@ int main(int argc, char* argv[])
 {
     if (argc < 2)
         return -1;
-    auto res = p.parse(string_buffer(argv[1]));
+    auto res = p.parse(string_buffer(argv[1]), std::cerr);
     bool success = res.has_value();
-    std::cout << res.value() << std::endl;
+    if (success)
+        std::cout << res.value() << std::endl;
     return success ? 0 : -1;
 }
