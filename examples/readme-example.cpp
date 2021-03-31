@@ -25,7 +25,7 @@ constexpr parser p(
         list(number) 
             >= [](const auto& sv) { return to_int(sv); },
         list(list, ',', number) 
-            >= [](int sum, skip, const auto& sv){ return sum + to_int(sv); }
+            >= [](int sum, char, const auto& sv){ return sum + to_int(sv); }
     )
 );
 
