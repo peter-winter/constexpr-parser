@@ -23,7 +23,7 @@ constexpr parser p(
     nterms(list),
     rules(
         list(number) 
-            >= [](const auto& n) { return to_int(n); },
+            >= to_int,
         list(list, ',', number) 
             >= [](int sum, char, const auto& n){ return sum + to_int(n); }
     )
