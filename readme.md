@@ -113,6 +113,7 @@ g++ readme_example.cpp -std=c++17 -o example && example
 ```
 should print the number 6.
 
+#### Invalid input in _constexpr_ parsing
 If the ```example_text``` variable was an invalid input, the code ```cres.value()```
 would throw, because the ```cres``` is of type ```std::optional<int>``` with no value.
 
