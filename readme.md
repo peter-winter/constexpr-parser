@@ -99,9 +99,10 @@ constexpr char number_pattern[] = "[1-9][0-9]*";
 // - the argument passed to constructor is a name, 
 //    name is used in debug features - therefore it should be meaningfull
 //    name also serves as an identifier - therefore it should be unique for all regex terminal symbols
+// terminal symbol value types are predefined, in case of regex terminal it is a type convertible to std::string_view 
 constexpr regex_term<number_pattern> number("number");
 
-// Function converting a value type of a regex terminal (always convertible to std::string_view) to an int
+// Function converting a value type of a regex terminal to an int
 int to_int(const std::string_view& sv)
 {
     int i = 0;
@@ -116,16 +117,24 @@ constexpr parser p(
     terms(',', number),         // all terminal symbols used in the grammar, 
                                 // notice the ',', which is a char terminal
                                 // and can be used without previous definition, unlike regex terminals
+                                // char term value type is always 'char'
+                                
     nterms(list),               // all nonterminal symbols
+    
     rules(                      // rules definition
-        list(number)            // single rule, a list can be a single number
-            >= to_int           // functor to be called when this rule is reduced in LR parsing
-                                // arguments passed to a functor are previously reduced symbols from a stack
+        list(number)            // single rule, definig list as a single number
+            >= to_int           // 'to_int' is a callble to be invoked when this rule is reduced in LR parsing
+                                // the 'number' terminal value is passed to a function returning 'int',
+                                // which is a value type of 'list' symbol
                                     
         list(list, ',', number) // another single rule, this time a list is defined using left recurrence
-                                // another functor, this time a lambda taking 3 symbols from a rule
+                                // as a callble, this time it is lambda taking 3 arguments
+                                // the value types are:
+                                //   - int for the 'list' nonterminal
+                                //   - char for a ',', a value for which is ignored in a lambda
+                                //   - auto& for a 'number' regex terminal, which converts to std:string_view
             >= [](int sum, char, const auto& n)
-            { return sum + to_int(n); }                                            
+            { return sum + to_int(n); } // it needs to return an 'int' - the value type of the 'list' symbol
     )
 );
 
