@@ -23,6 +23,8 @@ All it needs is a C++17 compiler!
    * [Limitations](#limitations)
    * [Functor helpers](#functor-helpers)
 * [Various features](#various-features)
+   * [Verbose output](#verbose-output)
+   * [Diagnostics](#diagnostics)
    * [Source tracking](#source-tracking)
    * [Buffers](#buffers)
 * [Regular expressions](#regular-expressions)
