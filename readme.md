@@ -15,6 +15,17 @@ All it needs is a C++17 compiler!
     * [Parser definition](#parser-definition)
     * [Parse method call](#parse-method-call)
 * [Compile Time Parsing](#compile-time-parsing)
+* [LR1 Parser](#lr1-parser)
+   * [Algorithm](#algorithm)
+   * [Conflicts](#conflicts)
+   * [Precedence and associativity](#precedence-and-associativity)
+* [Functors (advanced)](#functors-(advanced))
+   * [Limitations](#limitations)
+   * [Functor helpers](#functor-helpers)
+* [Various features](#various-features)
+   * [Source tracking](#source-tracking)
+   * [Buffers](#buffers)
+* [Regular expressions](#regular-expressions)
 
 
 ## Usage
@@ -296,3 +307,25 @@ Changing the ```parse``` call to:
 constexpr int cres = p.parse(cstring_buffer(example_text)).value();
 ```
 would cause compilation error, because throwing ```std::bad_optional_access``` is not _constexpr_.
+
+## LR1 parser
+   
+### Algorithm
+
+### Conflicts
+
+### Precedence and associativity
+
+## Functors (advanced)
+
+### Limitations
+
+### Functor helpers
+
+## Various features
+
+### Source tracking
+
+### Buffers
+
+### Regular expressions
