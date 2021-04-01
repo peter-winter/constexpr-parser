@@ -85,10 +85,10 @@ using namespace ctpg::buffers;
 ```
 #### Terminal symbols
 
-Terminal symbols (short terms) are symbols used in grammar definition that are atomic blocks.
-Examples of the terminals from a C++ language are: identifier, '+' operator, various keywords etc.
+Terminal symbols (short: terms) are symbols used in grammar definition that are atomic blocks.
+Examples of the terms from a C++ language are: identifier, '+' operator, various keywords etc.
 
-To define a nonterminal use the one of ```char_term```, ```string_term``` and ```regex_term``` classes.
+To define a nonterm use the one of ```char_term```, ```string_term``` and ```regex_term``` classes.
 
 Here is the example of a regex_term with a common integer number regex pattern.
 
@@ -108,10 +108,10 @@ Names are handy to diagnose problems with the grammar. If omitted, the name will
 
 #### Nonterminal symbols
 
-Nonterminal symbols (short nonterms) are essentially all non atomic symbols in the grammar. 
+Nonterminal symbols (short: nonterms) are essentially all non atomic symbols in the grammar. 
 In C++ language these are things like: expression, class definition, function declaration etc.
 
-To define a nonterminal use the ```nterm``` class.
+To define a nonterm use the ```nterm``` class.
 
 ```c++
 constexpr nterm<int> list("list");  
@@ -119,7 +119,7 @@ constexpr nterm<int> list("list");
 
 The constructor argument ("list") is a debug name as well, like in the case of regex_term.
 The difference is in nterms names are neccessary, because the serve as unique identifiers as well.
-Therefore it is a requirement that nonterminal names are unique.
+Therefore it is a requirement that nonterm names are unique.
 
 Template parameter ```<int>``` in this case is a **value type**. More on this concept later.
 
@@ -131,6 +131,9 @@ The ```parser``` class together with its template deduction guides allows to def
 - List of all terms 
 - List of all nonterms
 - List of rules
+
+The ```parser``` class should be declared as ```constexpr```, which makes all the neccessary calculations of the table parser done in compile time.
+
 
 Let's break down the arguments.
 
@@ -146,7 +149,7 @@ When the root symbol gets matched the parse is successful.
 
 **Term list.**
 
-List of terminals enclosed in a ```terms``` call.
+List of terms enclosed in a ```terms``` call.
 
 > Note: we can see that there is one extra term, the ```,```.
 This one is an implicit ```char_term```. The code implicitly converts the char to the ```char_term``` class.
@@ -155,14 +158,14 @@ the them by default to a char (or a string) they represent.
 
 **Nonterm list.**
 
-List of terminals enclosed in a ```nterms``` call.
+List of terms enclosed in a ```nterms``` call.
 
 **Rules**
 
 List of rules enclosed in a ```rules``` call.
 Each rule is in the form of:
-```nonterminal(symbols...) >= functor ```
-The ```nonterminal``` part is what's called a **left side** of the rule. The symbols are known as the **right side**.
+```nonterm(symbols...) >= functor ```
+The ```nonterm``` part is what's called a **left side** of the rule. The symbols are known as the **right side**.
 
 ```c++
     rules(
@@ -174,24 +177,25 @@ The ```nonterminal``` part is what's called a **left side** of the rule. The sym
     )
 ```
 
-The first rule ```list(number)``` indicates that the ```list``` nonterminal can be parsed using a single ```number``` regex terminal.
+The first rule ```list(number)``` indicates that the ```list``` nonterm can be parsed using a single ```number``` regex term.
 
 The second rule uses what's know as a left recurrence. In other words, a ```list``` can be parsed as a ```list``` followed by a ```,``` and a ```number```.
 
 **Functors**
 
-The functors are any callables that can accept the exact number of arguments as there are symbols in the right side.
-Each of the functor arguments need to accept a value of a **value type** of the nth right side symbol and return a value type of the left side nonterminal.
+The functors are any callables that can accept the exact number of arguments as there are symbols on the right side and return a value type of the left side nonterm.
+Each of the functor arguments need to accept a value of a **value type** of the nth right side symbol.
 
 So in the case of the first ```to_int``` functor, it is required to accept a value type of ```regex_term``` and return an ```int```.
+
 The second functor is a lambda which accepts 3 arguments: an ```int``` for the ```list```, a ```char``` for the ```,``` and and whatever is passed as
 a value type for the ```regex_term```.
 
 >Note: Functors are called in a way that allows taking advantage of move semantics, so defining it's arguments as a move reference is encouraged.
 
-**Value types for terminals**
+**Value types for terms**
 
-Terminals unlike nonterminals which have their value types defined in advance
+Terms unlike nonterms which have their value types defined in advance
 have their value types predefined to either a ```term_value<char>``` for a ```char_term```, and a ```term_value<std::string_view>``` 
 for both ```regex_term``` and ```string_term```.
 
