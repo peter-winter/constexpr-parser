@@ -25,6 +25,7 @@ All it needs is a C++17 compiler!
 * [Various features](#various-features)
    * [Verbose output](#verbose-output)
    * [Diagnostics](#diagnostics)
+   * [Parse options](#parse-options)
    * [Source tracking](#source-tracking)
    * [Buffers](#buffers)
 * [Regular expressions](#regular-expressions)
@@ -334,6 +335,8 @@ would cause compilation error, because throwing ```std::bad_optional_access``` i
 ### Verbose output
 
 ### Diagnostics
+
+### Parse options
 
 ### Source tracking
 
