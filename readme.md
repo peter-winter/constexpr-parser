@@ -190,6 +190,9 @@ Each rule is in the form of:
 ```nonterm(symbols...) >= functor ```
 The ```nonterm``` part is what's called a **left side** of the rule. The symbols are called the **right side**.
 
+The right side can contain any number of ```nterm``` objects as well as terms (```regex_terms```, ```char_terms``` or ```string_terms```).
+Terms can be in their implicit form, like ```,``` in the example. Implicit ```string_terms``` are in form of "strings".
+
 ```c++
     rules(
         list(number)
