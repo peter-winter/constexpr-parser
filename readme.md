@@ -5,11 +5,15 @@ C++ _**single header**_ library which takes a language description as a C++ code
 What's more, the generated parser is actually itself capable of parsing in compile time.
 All it needs is a C++17 compiler!
 
-[Usage](#usage)
-
-[Explanation](#explanation)
-
-[Compile Time Parsing](#compile-time-parsing)
+### Contents
+* [Usage](#usage)
+* [Explanation](#explanation)
+    * [Header](#header)
+    * [Namespaces](#namespaces)
+    * [Terminal symbols](#terminal-symbols)
+    * [Nonterminal symbols](#nonterminal-symbols)
+    * [Parser definition](#parser-definition)
+* [Compile Time Parsing](#compile-time-parsing)
 
 
 ## Usage
@@ -78,7 +82,7 @@ you should see:
 
 ## Explanation
 
-### Include header
+### Header
 ```c++
 #include "ctpg.hpp"
 ```
@@ -134,10 +138,10 @@ Template parameter ```<int>``` in this case is a **value type**. More on this co
 
 The ```parser``` class together with its template deduction guides allows to define parsers using 4 arguments:
 
-- Grammar root - symbol which is a top level nonterm for a grammar.
-- List of all terms 
-- List of all nonterms
-- List of rules
+* Grammar root - symbol which is a top level nonterm for a grammar.
+* List of all terms 
+* List of all nonterms
+* List of rules
 
 The ```parser``` object should be declared as ```constexpr```, which makes all the neccessary calculations of the table parser done in compile time.
 
