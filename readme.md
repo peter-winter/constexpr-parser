@@ -19,7 +19,7 @@ All it needs is a C++17 compiler!
    * [Algorithm](#algorithm)
    * [Conflicts](#conflicts)
    * [Precedence and associativity](#precedence-and-associativity)
-* [Functors (advanced)](#functors-(advanced))
+* [Functors - advanced](#functors---advanced)
    * [Limitations](#limitations)
    * [Functor helpers](#functor-helpers)
 * [Various features](#various-features)
@@ -316,7 +316,7 @@ would cause compilation error, because throwing ```std::bad_optional_access``` i
 
 ### Precedence and associativity
 
-## Functors (advanced)
+## Functors - advanced
 
 ### Limitations
 
@@ -328,4 +328,4 @@ would cause compilation error, because throwing ```std::bad_optional_access``` i
 
 ### Buffers
 
-### Regular expressions
+## Regular expressions
