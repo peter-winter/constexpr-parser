@@ -88,7 +88,7 @@ using namespace ctpg::buffers;
 Terminal symbols (short: terms) are symbols used in grammar definition that are atomic blocks.
 Examples of the terms from a C++ language are: identifier, '+' operator, various keywords etc.
 
-To define a nonterm use the one of ```char_term```, ```string_term``` and ```regex_term``` classes.
+To define a term use the one of ```char_term```, ```string_term``` and ```regex_term``` classes.
 
 Here is the example of a regex_term with a common integer number regex pattern.
 
@@ -101,7 +101,7 @@ Names are handy to diagnose problems with the grammar. If omitted, the name will
 
 >Note: the pattern needs to have a static linkage to be allowed as a template parameter. This is C++17 limitation, and CTPG does not support C++20 features yet.
 
-#### Other types of terms
+**Other types of terms**
 
 ```char_term``` is used when we need to match things like a ```+``` or ```,``` operator.
 ```string_term``` is used when we need to match a for instance a keyword.
@@ -118,7 +118,7 @@ constexpr nterm<int> list("list");
 ```
 
 The constructor argument ("list") is a debug name as well, like in the case of regex_term.
-The difference is in nterms names are neccessary, because the serve as unique identifiers as well.
+The difference is in nterms names are neccessary, because they serve as unique identifiers as well.
 Therefore it is a requirement that nonterm names are unique.
 
 Template parameter ```<int>``` in this case is a **value type**. More on this concept later.
@@ -132,7 +132,7 @@ The ```parser``` class together with its template deduction guides allows to def
 - List of all nonterms
 - List of rules
 
-The ```parser``` class should be declared as ```constexpr```, which makes all the neccessary calculations of the table parser done in compile time.
+The ```parser``` object should be declared as ```constexpr```, which makes all the neccessary calculations of the table parser done in compile time.
 
 
 Let's break down the arguments.
@@ -165,7 +165,7 @@ List of terms enclosed in a ```nterms``` call.
 List of rules enclosed in a ```rules``` call.
 Each rule is in the form of:
 ```nonterm(symbols...) >= functor ```
-The ```nonterm``` part is what's called a **left side** of the rule. The symbols are known as the **right side**.
+The ```nonterm``` part is what's called a **left side** of the rule. The symbols are called the **right side**.
 
 ```c++
     rules(
@@ -183,7 +183,7 @@ The second rule uses what's know as a left recurrence. In other words, a ```list
 
 **Functors**
 
-The functors are any callables that can accept the exact number of arguments as there are symbols on the right side and return a value type of the left side nonterm.
+The functors are any callables that can accept the exact number of arguments as there are symbols on the right side and return a value type of the left side.
 Each of the functor arguments need to accept a value of a **value type** of the nth right side symbol.
 
 So in the case of the first ```to_int``` functor, it is required to accept a value type of ```regex_term``` and return an ```int```.
@@ -195,20 +195,21 @@ a value type for the ```regex_term```.
 
 **Value types for terms**
 
-Terms unlike nonterms which have their value types defined in advance
+Terms unlike nonterms (which have their value types defined as a template parameter to the nterm definition),
 have their value types predefined to either a ```term_value<char>``` for a ```char_term```, and a ```term_value<std::string_view>``` 
 for both ```regex_term``` and ```string_term```.
 
-The ```term_value``` class termplate is a simple wrapper that is implicitly convertible to it's argument (either a ```char``` or ```std::string_view```).
+The ```term_value``` class termplate is a simple wrapper that is implicitly convertible to it's template parameter (either a ```char``` or ```std::string_view```).
 That's why when providing functors we can simply declare arguments as either a ```char``` or a ```std::string_view```.
 Of course an ```auto``` in case of lambda will always do the trick.
+
+The advantage of declaring functor arguments as ```term_value``` is that we can access other features (like source tracking) using the ```term_value``` methods.
 
 ### Parse method call
 
 Use ```parse``` method with 2 argumets:
 - a buffer
 - an error stream
-To get the parse result.
 
 **Buffers**
 
