@@ -5,10 +5,17 @@ C++ _**single header**_ library which takes a language description as a C++ code
 What's more, the generated parser is actually itself capable of parsing in compile time.
 All it needs is a C++17 compiler!
 
+[Usage](#usage)
+
+[Explanation](#explanation)
+
+[Compile Time Parsing](#compile-time-parsing)
+
+
 ## Usage
 Following code demonstrates a simple parser which takes a comma separated list of integer numbers as argument and prints a sum of them.
 
-#### **`readme_example.cpp`**
+**`readme_example.cpp`**
 ```c++
 #include "ctpg.hpp"
 #include <iostream>
@@ -69,21 +76,21 @@ you should see:
 [1:8] PARSE: Unexpected character: x
 ```
 
-### Explanation
+## Explanation
 
-#### Include header
+### Include header
 ```c++
 #include "ctpg.hpp"
 ```
 
-#### Namespaces
+### Namespaces
 
 Namespace ctpg is the top namespace. There are couple of feature namespaces like ```buffers```
 ```c++
 using namespace ctpg;
 using namespace ctpg::buffers;
 ```
-#### Terminal symbols
+### Terminal symbols
 
 Terminal symbols (short: terms) are symbols used in grammar definition that are atomic blocks.
 Examples of the terms from a C++ language are: identifier, '+' operator, various keywords etc.
@@ -106,7 +113,7 @@ Names are handy to diagnose problems with the grammar. If omitted, the name will
 ```char_term``` is used when we need to match things like a ```+``` or ```,``` operator.
 ```string_term``` is used when we need to match a for instance a keyword.
 
-#### Nonterminal symbols
+### Nonterminal symbols
 
 Nonterminal symbols (short: nonterms) are essentially all non atomic symbols in the grammar. 
 In C++ language these are things like: expression, class definition, function declaration etc.
@@ -123,7 +130,7 @@ Therefore it is a requirement that nonterm names are unique.
 
 Template parameter ```<int>``` in this case is a **value type**. More on this concept later.
 
-#### Parser definition
+### Parser definition
 
 The ```parser``` class together with its template deduction guides allows to define parsers using 4 arguments:
 
@@ -229,7 +236,7 @@ auto res = p.parse(string_buffer(argv[1]), std::cerr);
 The ```parse``` method returns an ```std::optional<T>```, where ```T``` is a value type of the root symbol.
 Use the ```.has_value()``` and the ```.value()``` to check and access the result of the parse.
 
-### Compile time parsing
+## Compile time parsing
 
 Above code can be easily changed to create an actual constexpr parser.
 Change the ```to_int``` function to:
@@ -274,7 +281,7 @@ g++ readme_example.cpp -std=c++17 -o example && example
 ```
 should print the number 24.
 
-#### Invalid input in _constexpr_ parsing
+### Invalid input in _constexpr_ parsing
 If the ```example_text``` variable was an invalid input, the code ```cres.value()```
 would throw, because the ```cres``` is of type ```std::optional<int>``` with no value.
 
