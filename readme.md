@@ -71,89 +71,158 @@ you should see:
 
 ### Explanation
 
+#### Include header
 ```c++
-//Include the only header
 #include "ctpg.hpp"
-
-// These two are for this example purposes
-#include <iostream>
-#include <charconv>
-
-using namespace ctpg;           // use the top namespace
-using namespace ctpg::buffers;  // and the one for buffers
-
-//Define nonterminal symbols used in the grammar, here just one is enough
-// - the argument passed to constructor is a name, 
-//     name is used in debug features - therefore it should be meaningfull
-//     name also serves as an identifier - therefore it should be unique for all nonterminal symbols
-// - template parameter is a value type of a nonterminal symbol
-//     whenever a nonterminal is reduced by a LR parser, value of this type is put on LR parser stack
-constexpr nterm<int> list("list");  
-
-
-constexpr char number_pattern[] = "[1-9][0-9]*";
-// define the terminal numbers, here just one is enough
-// - regex patterns should have the static linkage to allow them as a non-type template parameter
-//     this is relaxed in c++20 which allows string constants to be passed as template parameters
-//     for now CTPG allow only c++17 syntax
-// - the argument passed to constructor is a name, 
-//    name is used in debug features - therefore it should be meaningfull
-//    name also serves as an identifier - therefore it should be unique for all regex terminal symbols
-// terminal symbol value types are predefined, in case of regex terminal it is a type convertible to std::string_view 
-constexpr regex_term<number_pattern> number("number");
-
-// Function converting a value type of a regex terminal to an int
-int to_int(const std::string_view& sv)
-{
-    int i = 0;
-    // return value of 'from_chars' can be safely ignored, the input is guaranteed to be valid at this point
-    std::from_chars(sv.data(), sv.data() + sv.size(), i);
-    return i;
-}
-
-// Parser definition
-constexpr parser p(
-    list,                       // root symbol of the grammar
-    terms(',', number),         // all terminal symbols used in the grammar, 
-                                // notice the ',', which is a char terminal
-                                // and can be used without previous definition, unlike regex terminals
-                                // char term value type is always 'char'
-                                
-    nterms(list),               // all nonterminal symbols
-    
-    rules(                      // rules definition
-        list(number)            // single rule, definig list as a single number
-            >= to_int           // 'to_int' is a callble to be invoked when this rule is reduced in LR parsing
-                                // the 'number' terminal value is passed to a function returning 'int',
-                                // which is a value type of 'list' symbol
-                                    
-        list(list, ',', number) // another single rule, this time a list is defined using left recurrence
-                                // as a callble, this time it is lambda taking 3 arguments
-                                // the value types are:
-                                //   - int for the 'list' nonterminal
-                                //   - char for a ',', a value for which is ignored in a lambda
-                                //   - auto& for a 'number' regex terminal, which converts to std:string_view
-            >= [](int sum, char, const auto& n)
-            { return sum + to_int(n); } // it needs to return an 'int' - the value type of the 'list' symbol
-    )
-);
-
-int main(int argc, char* argv[])
-{
-    if (argc < 2)
-        return -1;
-    
-    // First argument is a buffer object
-    // Second argument is an error stream
-    // Parse result is of type std::optional<int>, because root symbol (list) value type is 'int'
-    auto res = p.parse(string_buffer(argv[1]), std::cerr);
-    
-    bool success = res.has_value();
-    if (success)
-        std::cout << res.value() << std::endl;
-    return success ? 0 : -1;
-}
 ```
+
+#### Namespaces
+
+Namespace ctpg is the top namespace. There are couple of feature namespaces like ```buffers```
+```c++
+using namespace ctpg;
+using namespace ctpg::buffers;
+```
+#### Terminal symbols
+
+Terminal symbols (short terms) are symbols used in grammar definition that are atomic blocks.
+Examples of the terminals from a C++ language are: identifier, '+' operator, various keywords etc.
+
+To define a nonterminal use the one of ```char_term```, ```string_term``` and ```regex_term``` classes.
+
+Here is the example of a regex_term with a common integer number regex pattern.
+
+```c++
+constexpr char number_pattern[] = "[1-9][0-9]*";
+constexpr regex_term<number_pattern> number("number");
+```
+The constructor argument ```("number")``` indicates a debug name and can be omitted, however it is not advised.
+Names are handy to diagnose problems with the grammar. If omitted, the name will be set to the pattern string.
+
+>Note: the pattern needs to have a static linkage to be allowed as a template parameter. This is C++17 limitation, and CTPG does not support C++20 features yet.
+
+#### Other types of terms
+
+```char_term``` is used when we need to match things like a ```+``` or ```,``` operator.
+```string_term``` is used when we need to match a for instance a keyword.
+
+#### Nonterminal symbols
+
+Nonterminal symbols (short nonterms) are essentially all non atomic symbols in the grammar. 
+In C++ language these are things like: expression, class definition, function declaration etc.
+
+To define a nonterminal use the ```nterm``` class.
+
+```c++
+constexpr nterm<int> list("list");  
+```
+
+The constructor argument ("list") is a debug name as well, like in the case of regex_term.
+The difference is in nterms names are neccessary, because the serve as unique identifiers as well.
+Therefore it is a requirement that nonterminal names are unique.
+
+Template parameter ```<int>``` in this case is a **value type**. More on this concept later.
+
+#### Parser definition
+
+The ```parser``` class together with its template deduction guides allows to define parsers using 4 arguments:
+
+- Grammar root - symbol which is a top level nonterm for a grammar.
+- List of all terms 
+- List of all nonterms
+- List of rules
+
+Let's break down the arguments.
+
+```c++
+constexpr parser p(
+    list,
+    terms(',', number),         
+    nterms(list),  
+```
+**Grammar root.** 
+
+When the root symbol gets matched the parse is successful.
+
+**Term list.**
+
+List of terminals enclosed in a ```terms``` call.
+
+> Note: we can see that there is one extra term, the ```,```.
+This one is an implicit ```char_term```. The code implicitly converts the char to the ```char_term``` class.
+Therefore ```char_terms``` (as well as ```string_terms```) are allowed not to be defined in advance. Their debug names are assigned to 
+the them by default to a char (or a string) they represent.
+
+**Nonterm list.**
+
+List of terminals enclosed in a ```nterms``` call.
+
+**Rules**
+
+List of rules enclosed in a ```rules``` call.
+Each rule is in the form of:
+```nonterminal(symbols...) >= functor ```
+The ```nonterminal``` part is what's called a **left side** of the rule. The symbols are known as the **right side**.
+
+```c++
+    rules(
+        list(number)
+            >= to_int
+        list(list, ',', number)
+            >= [](int sum, char, const auto& n)
+            { return sum + to_int(n); }
+    )
+```
+
+The first rule ```list(number)``` indicates that the ```list``` nonterminal can be parsed using a single ```number``` regex terminal.
+
+The second rule uses what's know as a left recurrence. In other words, a ```list``` can be parsed as a ```list``` followed by a ```,``` and a ```number```.
+
+**Functors**
+
+The functors are any callables that can accept the exact number of arguments as there are symbols in the right side.
+Each of the functor arguments need to accept a value of a **value type** of the nth right side symbol and return a value type of the left side nonterminal.
+
+So in the case of the first ```to_int``` functor, it is required to accept a value type of ```regex_term``` and return an ```int```.
+The second functor is a lambda which accepts 3 arguments: an ```int``` for the ```list```, a ```char``` for the ```,``` and and whatever is passed as
+a value type for the ```regex_term```.
+
+>Note: Functors are called in a way that allows taking advantage of move semantics, so defining it's arguments as a move reference is encouraged.
+
+**Value types for terminals**
+
+Terminals unlike nonterminals which have their value types defined in advance
+have their value types predefined to either a ```term_value<char>``` for a ```char_term```, and a ```term_value<std::string_view>``` 
+for both ```regex_term``` and ```string_term```.
+
+The ```term_value``` class termplate is a simple wrapper that is implicitly convertible to it's argument (either a ```char``` or ```std::string_view```).
+That's why when providing functors we can simply declare arguments as either a ```char``` or a ```std::string_view```.
+Of course an ```auto``` in case of lambda will always do the trick.
+
+### Parse method call
+
+Use ```parse``` method with 2 argumets:
+- a buffer
+- an error stream
+To get the parse result.
+
+**Buffers**
+
+Use a string_buffer from a ```buffers``` namespace to parse a null terminated string or a ```std::string```.
+
+**Error stream**
+
+Stream reference like ``std::cerr`` or any other ```std::ostream``` can be pased as a stream argument.
+This is the place where the ```parse``` method is going to spit out error messages like a syntax error.
+
+```c++
+auto res = p.parse(string_buffer(argv[1]), std::cerr);
+```
+
+**Parse return value**
+
+The ```parse``` method returns an ```std::optional<T>```, where ```T``` is a value type of the root symbol.
+Use the ```.has_value()``` and the ```.value()``` to check and access the result of the parse.
 
 ### Compile time parsing
 
