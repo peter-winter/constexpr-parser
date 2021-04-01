@@ -275,6 +275,8 @@ constexpr int to_int(const std::string_view& sv)
 
 The function is now _constexpr_. The ```<charconv>``` header is now unneccessary.
 
+>Note: To allow _constexpr_ parsing all of the nonterm value types have to be _literal types_.
+
 Also change the _main_ to use ```cstring_buffer``` and declare a parse result _constexpr_.
 The error stream argument is also unavailable in _constexpr_ parsing.
 
