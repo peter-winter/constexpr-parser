@@ -112,18 +112,19 @@ int to_int(const std::string_view& sv)
 
 // Parser definition
 constexpr parser p(
-    list,                           // root symbol of the grammar
-    terms(',', number),             // all terminal symbols used in the grammar, 
-                                    // notice the ',', which is a char terminal
-                                    // and can be used without previous definition, unlike regex terminals
-    nterms(list),                   // all nonterminal symbols
-    rules(                          // rules definition
-        list(number)                // single rule, a list can be a single number
-            >= to_int               // functor to be called when this rule is reduced in LR parsing
-                                    // arguments passed to a functor are previously reduced symbols from a stack
+    list,                       // root symbol of the grammar
+    terms(',', number),         // all terminal symbols used in the grammar, 
+                                // notice the ',', which is a char terminal
+                                // and can be used without previous definition, unlike regex terminals
+    nterms(list),               // all nonterminal symbols
+    rules(                      // rules definition
+        list(number)            // single rule, a list can be a single number
+            >= to_int           // functor to be called when this rule is reduced in LR parsing
+                                // arguments passed to a functor are previously reduced symbols from a stack
                                     
-        list(list, ',', number)     // another single rule, this time a list is defined using left recurrence
-            >= [](int sum, char, const auto& n)    // another functor, this time a lambda taking 3 symbols from a rule
+        list(list, ',', number) // another single rule, this time a list is defined using left recurrence
+                                // another functor, this time a lambda taking 3 symbols from a rule
+            >= [](int sum, char, const auto& n)
             { return sum + to_int(n); }                                            
     )
 );
