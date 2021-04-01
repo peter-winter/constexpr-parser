@@ -13,6 +13,7 @@ All it needs is a C++17 compiler!
     * [Terminal symbols](#terminal-symbols)
     * [Nonterminal symbols](#nonterminal-symbols)
     * [Parser definition](#parser-definition)
+    * [Parse method call](#parse-method-call)
 * [Compile Time Parsing](#compile-time-parsing)
 
 
