@@ -257,8 +257,9 @@ Use the ```.has_value()``` and the ```.value()``` to check and access the result
 
 ## Compile time parsing
 
-Above code can be easily changed to create an actual constexpr parser.
-Change the ```to_int``` function to:
+Example code can be easily changed to create an actual constexpr parser.
+First, all the functors need to be constexpr. 
+To achieve this change the ```to_int``` function to:
 
 ```c++
 constexpr int to_int(const std::string_view& sv)
@@ -271,7 +272,8 @@ constexpr int to_int(const std::string_view& sv)
 
 The function is now _constexpr_. The ```<charconv>``` header is now unneccessary.
 
-Also change the _main_ to:
+Also change the _main_ to use ```cstring_buffer``` and declare a parse result _constexpr_.
+The error stream argument is also unavailable in _constexpr_ parsing.
 
 ```c++
 int main(int argc, char* argv[])
@@ -293,7 +295,7 @@ int main(int argc, char* argv[])
 }
 ```
 
-Now when no argument specified it prints the compile time result of parsing "1, 20, 3". 
+Now when no argument is passed to the program, it prints the compile time result of parsing "1, 20, 3". 
 
 ```sh
 g++ readme_example.cpp -std=c++17 -o example && example
@@ -326,6 +328,10 @@ would cause compilation error, because throwing ```std::bad_optional_access``` i
 ### Functor helpers
 
 ## Various features
+
+### Verbose output
+
+### Diagnostics
 
 ### Source tracking
 
