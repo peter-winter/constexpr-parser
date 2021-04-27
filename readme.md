@@ -21,6 +21,7 @@ All it needs is a C++17 compiler!
    * [Precedence and associativity](#precedence-and-associativity)
 * [Functors - advanced](#functors---advanced)
    * [Functor helpers](#functor-helpers)
+   * [Default functors](#default-functors)
 * [Various features](#various-features)
    * [Verbose output](#verbose-output)
    * [Diagnostics](#diagnostics)
@@ -692,6 +693,8 @@ constexpr regex_term<pattern> number("number");
 
 constexpr to_int(std::string_view x){ /*implement*/ }
 
+constexpr nterm<int> expr("expr");
+
 constexpr parser p(
     expr,
     terms('+', '(', ')', number),
@@ -703,6 +706,44 @@ constexpr parser p(
             >= [](int i1, auto, int i2){ return i1 + i2; },
         expr('(', expr, ')')
             >= _e2      // here, just return the second element
+    )
+);
+```
+
+## Default functors
+
+There is a situation where the functor can be entirely omitted, that is whenever a left side value type is _move constructible_ from right side value types:
+
+```c++
+constexpr char word_pattern[] = "[0-9A-Za-z]+";
+constexpr regex_term<word_pattern> word("word");
+constexpr char protocol_pattern[] = "http://|https://";
+constexpr regex_term<protocol_pattern> protocol("protocol");
+
+using list_type = std::vector<std:string_view>;
+struct url_type
+{
+    constexpr url_type(std::string_view pr, list_type&& l):
+         pr(pr), l(std::move(l))
+    {}
+    std::string_view pr;
+    list_type l;
+};
+
+constexpr nterm<url_type> url;
+constexpr nterm<list_type> list;
+
+constexpr parser p(
+    url,
+    terms(word, '.', protocol),
+    nterms(url, list),
+    rules(
+        list(word)
+            >= [](auto w){ return list_type{w}; },
+        list(list, '.', word)
+            >= [](auto&& l, auto, auto w){ l.push_back(w); return std::move(l); },
+        url(protocol, list)
+            // skip functor entirely, url_type move constructible from right side value types
     )
 );
 ```
