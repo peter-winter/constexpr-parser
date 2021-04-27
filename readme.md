@@ -20,7 +20,6 @@ All it needs is a C++17 compiler!
    * [Conflicts](#conflicts)
    * [Precedence and associativity](#precedence-and-associativity)
 * [Functors - advanced](#functors---advanced)
-   * [Limitations](#limitations)
    * [Functor helpers](#functor-helpers)
 * [Various features](#various-features)
    * [Verbose output](#verbose-output)
@@ -600,13 +599,9 @@ So let's create a functor:
 
 The ```name``` argument will resolve to ```term_value<std::string_view>&&```, which is convertible to ```std::string_view&&```.
 
-Here we take advantage of move semantics which are supported in the functor calls. This way we are working with the same ```std::vector``` instance
-we created as empty using the first rule.
-
 Now the parser looks like this:
 
 ```c++
-
 constexpr char pattern[] = "[a-zA-Z0-9_]+";
 constexpr regex_term<pattern> name("name");
 using name_type = std::string_view;
@@ -621,12 +616,17 @@ constexpr parser p(
         list() 
             >= [](){ return list_type{}; },
         list(name, list)
-            >= [](auto&& name, auto&& list){ list.emplace_back(std::move(name)); return list; }
+            >= [](auto&& name, auto&& list){ list.push_back(name); return std::move(list); }
     )
  );
 ```
 
-### Limitations
+>Note: Here we take advantage of move semantics which are supported in the functor calls. This way we are working with the same ```std::vector``` instance
+we created as empty using the first rule.
+
+>**Important Note**
+It is possible for functors to have referrence (both const and not) argument types, however lifetime of the objects passed to functors ends immediately after the functor returns.
+So it is better to avoid using referrence types as nterm value types.
 
 ### Functor helpers
 
