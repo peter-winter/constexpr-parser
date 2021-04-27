@@ -396,7 +396,6 @@ constexpr parser p(
         expr(expr, '*', expr)
     )
 );
-
 ```
 
 Consider ```2 + 2 * 2``` input being parsed and a parser in a state after successfully matching ```2 + 2``` and encountering ```*``` term.
@@ -427,7 +426,7 @@ constexpr parser p(
         expr(expr, '+', expr),      // note: no need for o_plus and o_mul in the rules, however possible
         expr(expr, '*', expr)
     )
- );
+);
 ```
 
 The higher the precedence value set, the higher the term precedence. Default term precedence is equal to 0. 
@@ -452,7 +451,7 @@ constexpr parser p(
         expr(expr, '*', expr),
         expr('-', expr)          // extra rule allowing unary -
     )
- );
+);
 ```
 
 Binary ```-``` and ```+``` operators have the same precedence in pretty much all languages.
@@ -486,7 +485,7 @@ constexpr parser p(
         expr(expr, '*', expr),
         expr('-', expr)[3]       // extra rule allowing unary -, with biggest precedence
     )
- );
+);
 ```
 
 **Example 3**
@@ -547,7 +546,7 @@ constexpr parser p(
         op('+'),
         op(special_op)
     )
- );
+);
 ```
 
 Let's say we parse an input ```!```. The parser has no way of telling if it should reduce using rule ```special_op('!')``` or ```op('!')```.
@@ -576,7 +575,7 @@ constexpr parser p(
         list(),
         list(name, list)
     )
- );
+);
 ```
 
 How exactly would the functors look for this kind of parser?
@@ -618,7 +617,7 @@ constexpr parser p(
         list(name, list)
             >= [](auto&& name, auto&& list){ list.push_back(name); return std::move(list); }
     )
- );
+);
 ```
 
 >Note: Here we take advantage of move semantics which are supported in the functor calls. This way we are working with the same ```std::vector``` instance
@@ -629,6 +628,84 @@ It is possible for functors to have referrence (both const and not) argument typ
 So it is better to avoid using referrence types as nterm value types.
 
 ### Functor helpers
+
+There are a couple of handy ready to use handler templates:
+
+**val**
+
+Use when a functor needs to return a value which doesn't depend on left side:
+
+```c++
+using namespace ctpg::ftors;
+constexpr nterm<bool> binary("binary");
+
+constexpr parser p(
+    binary,
+    terms('0', '1', '&', '|'),
+    nterms(binary),
+    rules(
+        binary('0') 
+            >= val(false),
+        binary('1') 
+            >= val(true),
+        binary(binary, '&', binary) 
+            >= [](bool b1, auto, bool b2){ return b1 & b2; },
+        binary(binary, '|', binary) 
+            >= [](bool b1, auto, bool b2){ return b1 | b2; },
+    )
+);   
+```
+
+**create**
+
+Use when a functor needs to return a defalt value of a given type:
+
+```c++
+
+// word list parser from one of previous examples
+
+using namespace ctpg::ftors;
+
+constexpr parser p(
+    list,
+    terms(name),
+    nterms(list),
+    rules(
+        list() 
+            >= create<list_type>{},    // use instead of a lambda
+        list(name, list)
+            >= [](auto&& name, auto&& list){ list.push_back(name); return std::move(list); }
+    )
+);
+```
+
+**element placeholders**
+
+Use whenever a rule simply passes nth element from the right side:
+
+```c++
+
+using namespace ctpg::ftors;
+
+constexpr char pattern[] = "[1-9][0-9]*";
+constexpr regex_term<pattern> number("number");
+
+constexpr to_int(std::string_view x){ /*implement*/ }
+
+constexpr parser p(
+    expr,
+    terms('+', '(', ')', number),
+    nterms(expr),
+    rules(
+        expr(number)
+            >= to_int,
+        expr(expr, '+', expr)
+            >= [](int i1, auto, int i2){ return i1 + i2; },
+        expr('(', expr, ')')
+            >= _e2      // here, just return the second element
+    )
+);
+```
 
 ## Various features
 
