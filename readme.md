@@ -15,7 +15,7 @@ All it needs is a C++17 compiler!
     * [Parser definition](#parser-definition)
     * [Parse method call](#parse-method-call)
 * [Compile Time Parsing](#compile-time-parsing)
-* [LR1 Parser](#lr1-parser)
+* [LR(1) Parser](#lr1-parser)
    * [Algorithm](#algorithm)
    * [Conflicts](#conflicts)
    * [Precedence and associativity](#precedence-and-associativity)
@@ -318,9 +318,61 @@ constexpr int cres = p.parse(cstring_buffer(example_text)).value();
 ```
 would cause compilation error, because throwing ```std::bad_optional_access``` is not _constexpr_.
 
-## LR1 parser
+## LR(1) parser
    
+CTPG uses a LR(1) parser. This is short from left-to-right and 1 lookahead symbol.
+
 ### Algorithm
+
+The parser uses a parse table which is somewhat resebling a state machine. 
+Here is pseudo code for the algorithm:
+
+```
+struct entry
+   int next          // valid if shift
+   int rule_length   // valid if reduce
+   int nterm_nr      // valid if reduce   
+   enum kind {success, shift, reduce, error }
+   
+bool parse(input, sr_table[states_count][terms_count], goto_table[states_count][nterms_count])
+   state = 0
+   states.push(state)
+   needs_term = true;
+   
+   while (true)
+      if (needs_term)
+         term_nr = get_next_term(input)
+      entry = sr_table[state, term_nr]
+      kind = entry.kind
+           
+      if (kind == success)
+         return true
+         
+      else if (kind == shift)
+         needs_term = true;
+         state = entry.next
+         states.push(state)
+         continue
+         
+      else if (kind == reduce)
+         states.pop_n(entry.rule_length)
+         state = states.top()
+         state = goto_table[state, entry.nterm_nr]
+         continue
+         
+      else
+         return false
+```
+
+Parser contains a state stack, which grows when the algorithm encounters a _shift_ operation and shrinks on _reduce_ operation.
+
+Aside from a state stack, there is also a value stack for dedicated for parse result calculation. 
+Each _shift_ pushes a value to the stack and each _reduce_ calls an appropriate functor with values from a value stack, removing them from stack in the process.
+
+**Table creation**
+
+This topic is out of scope of this manual. There is plenty of material online on LR parsers. 
+Recomended book on the topic: [Compilers: Principles, Techniques and Tools](https://en.wikipedia.org/wiki/Compilers:_Principles,_Techniques,_and_Tools)
 
 ### Conflicts
 
