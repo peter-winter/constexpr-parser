@@ -367,7 +367,7 @@ bool parse(input, sr_table[states_count][terms_count], goto_table[states_count][
 Parser contains a state stack, which grows when the algorithm encounters a _shift_ operation and shrinks on _reduce_ operation.
 
 Aside from a state stack, there is also a value stack for dedicated for parse result calculation. 
-Each _shift_ pushes a value to the stack and each _reduce_ calls an appropriate functor with values from a value stack, removing them from stack in the process.
+Each _shift_ pushes a value to the stack and each _reduce_ calls an appropriate functor with values from a value stack, removing values from a stack and replacing them with a single value associated with a rule's left side.
 
 **Table creation**
 
@@ -376,7 +376,126 @@ Recomended book on the topic: [Compilers: Principles, Techniques and Tools](http
 
 ### Conflicts
 
+There are situations (parser states) in which when a particualr term is encountered on the input, there is an ambiguity regarding the operation a parser should perform.
+
+In other words a language grammar may be defined in such a way, that both _shift_ and _reduce_ can lead to a successfull parse result, however the result will be different in both cases.
+
+**Example 1**
+
+Consider a classic expression parser (functors omitted for clarity):
+
+```
+constexpr parser p(
+    expr,
+    terms('+', '*', number),
+    nterms(expr),
+    rules(
+        expr(number),
+        expr(expr, '+', expr),
+        expr(expr, '*', expr)
+    )
+);
+
+```
+
+Consider ```2 + 2 * 2``` input being parsed and a parser in a state after successfully matching ```2 + 2``` and encountering ```*``` term.
+
+Both _shifting_ a ```*``` term and _reducing_ by the rule expr(expr, '+', expr) would be valid, however would produce different results.
+This is a classic operator **precedence** case, and this conflict needs to be resolved somehow. This is where precedence and associativity take place.
+
 ### Precedence and associativity
+
+CTPG parsers can resolve such conflict based on precedence and associativity rules defined in a grammar.
+
+Example above can be fixed by explicit term definitions.
+
+Normally, ```char_terms``` can be introduced by implicit definition in the ```terms``` call. However when in need to define a precedence, explicit definition is required.
+
+Simply change the code to:
+
+``` c++
+char_term o_plus('+', 1);  // precedence set to 1
+char_term o_mul('*', 2);   // precedence set to 2
+
+constexpr parser p(
+    expr,
+    terms(o_plus, o_mul, number),
+    nterms(expr),
+    rules(
+        expr(number),
+        expr(expr, '+', expr),      // note: no need for o_plus and o_mul in the rules, however possible
+        expr(expr, '*', expr)
+    )
+ );
+```
+
+The higher the precedence value set, the higher the term precedence. Default term precedence is equal to 0. 
+
+This explicit precedence definition allows a ```*``` operator to have bigger precedence over ```+```.
+
+**Example 2**
+
+``` c++
+char_term o_plus('+', 1);  // precedence set to 1
+char_term o_minus('-', 1);  // precedence set to 1
+char_term o_mul('*', 2);   // precedence set to 2
+
+constexpr parser p(
+    expr,
+    terms(o_plus, o_minus, o_mul, number),
+    nterms(expr),
+    rules(
+        expr(number),
+        expr(expr, '+', expr),
+        expr(expr, '-', expr),   // extra rule allowing binary -
+        expr(expr, '*', expr),
+        expr('-', expr)          // extra rule allowing unary -
+    )
+ );
+```
+
+Binary ```-``` and ```+``` operators have the same precedence in pretty much all languages.
+Unary ```-``` however almost always have a bigger precedence than all binary operators. 
+We can't achieve this by simply defining ```-``` precedence in ```char_term``` definition.
+We need a way to tell that ```expr('-', expr)``` has a bigger precedence then all binary rules.
+
+To achieve this override the precedence in a term by a precedence in a rule changing:
+
+```expr('-', expr)```
+to
+```expr('-', expr)[3]```
+
+The ```[]``` operator allows exactly this. It explicitly sets the rule precedence so the parser does not have to deduce rule precedence from a term.
+
+So the final code looks like this:
+
+``` c++
+char_term o_plus('+', 1);  // precedence set to 1
+char_term o_minus('-', 1);  // precedence set to 1
+char_term o_mul('*', 2);   // precedence set to 2
+
+constexpr parser p(
+    expr,
+    terms(o_plus, o_minus, o_mul, number),
+    nterms(expr),
+    rules(
+        expr(number),
+        expr(expr, '+', expr),
+        expr(expr, '-', expr),   // extra rule allowing binary -
+        expr(expr, '*', expr),
+        expr('-', expr)[3]       // extra rule allowing unary -, with biggest precedence
+    )
+ );
+```
+
+**Example 3**
+
+Consider the final code and let's say the input is ```2 + 2 + 2```, parser has read ```2 + 2``` and is about to read the second ```+```.
+In this case what is the required behaviour? Should the first ```2 + 2``` be reduced or a second ```+``` should be shifted?
+
+This is the classis **associativity** case which can be solved by expicitly defining the term associativity. 
+
+There are 3 types of associativity available: _left to right_, _right_to_left_ and _no_assoc_ as the default.
 
 ## Functors - advanced
 
