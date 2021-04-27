@@ -258,6 +258,8 @@ auto res = p.parse(string_buffer(argv[1]), std::cerr);
 The ```parse``` method returns an ```std::optional<T>```, where ```T``` is a value type of the root symbol.
 Use the ```.has_value()``` and the ```.value()``` to check and access the result of the parse.
 
+>Note: White space characters are skipped by default between consequent terms.
+
 ## Compile time parsing
 
 Example code can be easily changed to create an actual constexpr parser.
@@ -414,8 +416,8 @@ Normally, ```char_terms``` can be introduced by implicit definition in the ```te
 Simply change the code to:
 
 ``` c++
-char_term o_plus('+', 1);  // precedence set to 1
-char_term o_mul('*', 2);   // precedence set to 2
+constexpr char_term o_plus('+', 1);  // precedence set to 1
+constexpr char_term o_mul('*', 2);   // precedence set to 2
 
 constexpr parser p(
     expr,
@@ -436,9 +438,9 @@ This explicit precedence definition allows a ```*``` operator to have bigger pre
 **Example 2**
 
 ``` c++
-char_term o_plus('+', 1);  // precedence set to 1
-char_term o_minus('-', 1);  // precedence set to 1
-char_term o_mul('*', 2);   // precedence set to 2
+constexpr char_term o_plus('+', 1);  // precedence set to 1
+constexpr char_term o_minus('-', 1);  // precedence set to 1
+constexpr char_term o_mul('*', 2);   // precedence set to 2
 
 constexpr parser p(
     expr,
@@ -469,10 +471,10 @@ The ```[]``` operator allows exactly this. It explicitly sets the rule precedenc
 
 So the final code looks like this:
 
-``` c++
-char_term o_plus('+', 1);  // precedence set to 1
-char_term o_minus('-', 1);  // precedence set to 1
-char_term o_mul('*', 2);   // precedence set to 2
+```c++
+constexpr char_term o_plus('+', 1);  // precedence set to 1
+constexpr char_term o_minus('-', 1);  // precedence set to 1
+constexpr char_term o_mul('*', 2);   // precedence set to 2
 
 constexpr parser p(
     expr,
@@ -494,16 +496,16 @@ Consider the final code and let's say the input is ```2 + 2 + 2```, parser has r
 In this case what is the required behaviour? Should the first ```2 + 2``` be reduced or a second ```+``` should be shifted?
 (This may not matter in case of integer calculations, but may have a big difference in situations like expression type deduction in c++ when operator overloading is involved.)
 
-This is the classis **associativity** case which can be solved by expicitly defining the term associativity. 
+This is the classic **associativity** case which can be solved by expicitly defining the term associativity. 
 
 There are 3 types of associativity available: _left to right_, _right to left_ and _not associative_ as the default.
 
 To explicitly define a term associativity change the term definitions to:
 
 ``` c++
-char_term o_plus('+', 1, associativity::ltor);
-char_term o_minus('-', 1, associativity::ltor);
-char_term o_mul('*', 2, associativity::ltor);
+constexpr char_term o_plus('+', 1, associativity::ltor);
+constexpr char_term o_minus('-', 1, associativity::ltor);
+constexpr char_term o_mul('*', 2, associativity::ltor);
 ```
 
 Now all of these operators are left associative, meaning the _reduce_ will be preferred over _shift_.
@@ -522,10 +524,77 @@ Let **r** be a rule which is a subject to reduce and **t** be a term that is enc
 1. when explicit **r** precedence  from ```[]``` operator is bigger than **t** precedence, perform a _reduce_
 2. when precedence of **last term** in **r** is bigger than **t** precedence, perform a _reduce_
 3. when precedence of **last term** in **r** is equal to **t** precedence and
-   **last term** in **r** is left associative, perform _reduce_
-4. otherwise, perform a shift.
+   **last term** in **r** is left associative, perform a _reduce_
+4. otherwise, perform a _shift_.
   
 ## Functors - advanced
+
+Consider a parser matching white space separated names (strings).
+
+```c++
+
+constexpr char pattern[] = "[a-zA-Z0-9_]+";
+constexpr regex_term<pattern> name("name");
+using name_type = std::string_view;
+using list_type = std::vector<name_type>;
+constexpr nterm<list_type> list("list");
+
+constexpr parser p(
+    list,
+    terms(name),
+    nterms(list),
+    rules(
+        list(),
+        list(name, list)
+    )
+ );
+```
+
+How exactly would the functors look for this kind of parser?
+
+The first rule ```expr()``` is an example of an empty rule. This means the list can be _reduced_ from no input.
+
+Since the rule's left side is a ```list``` the functor needs to return its **value type**, which is a ```list_type```.
+The right side is empty so the functor needs to have no arguments.
+
+So let's return an empty vector: ``` [](){ return list_type{}; } ```
+
+The second rule reduces a list from a name and a list, therefore the functor needs to accept:
+- ```term_value<std::string_view>``` for the first argument: name
+- ```list_type``` for the second argument: list
+- return a ```list_type```
+
+So let's create a functor:
+
+```[](auto&& name, auto&& list){ list.emplace_back(std::move(name)); return list; }```
+
+The ```name``` argument will resolve to ```term_value<std::string_view>&&```, which is convertible to ```std::string_view&&```.
+
+Here we take advantage of move semantics which are supported in the functor calls. This way we are working with the same ```std::vector``` instance
+we created as empty using the first rule.
+
+Now the parser looks like this:
+
+```c++
+
+constexpr char pattern[] = "[a-zA-Z0-9_]+";
+constexpr regex_term<pattern> name("name");
+using name_type = std::string_view;
+using list_type = std::vector<name_type>;
+constexpr nterm<list_type> list("list");
+
+constexpr parser p(
+    list,
+    terms(name),
+    nterms(list),
+    rules(
+        list() 
+            >= [](){ return list_type{}; },
+        list(name, list)
+            >= [](auto&& name, auto&& list){ list.emplace_back(std::move(name)); return list; }
+    )
+ );
+```
 
 ### Limitations
 
