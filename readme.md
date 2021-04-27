@@ -492,11 +492,39 @@ constexpr parser p(
 
 Consider the final code and let's say the input is ```2 + 2 + 2```, parser has read ```2 + 2``` and is about to read the second ```+```.
 In this case what is the required behaviour? Should the first ```2 + 2``` be reduced or a second ```+``` should be shifted?
+(This may not matter in case of integer calculations, but may have a big difference in situations like expression type deduction in c++ when operator overloading is involved.)
 
 This is the classis **associativity** case which can be solved by expicitly defining the term associativity. 
 
-There are 3 types of associativity available: _left to right_, _right_to_left_ and _no_assoc_ as the default.
+There are 3 types of associativity available: _left to right_, _right to left_ and _not associative_ as the default.
 
+To explicitly define a term associativity change the term definitions to:
+
+``` c++
+char_term o_plus('+', 1, associativity::ltor);
+char_term o_minus('-', 1, associativity::ltor);
+char_term o_mul('*', 2, associativity::ltor);
+```
+
+Now all of these operators are left associative, meaning the _reduce_ will be preferred over _shift_.
+
+Should the associativity be defined as ```associativity::rtol```, _shift_ would be preferred.
+
+No associativity prefers shift by default.
+
+
+**Precedence and associativity summary**
+
+When a _shift_ _reduce_ conflict is encountered these rules apply in order:
+
+Let **r** be a rule which is a subject to reduce and **t** be a term that is encountered on input.
+
+1. when explicit **r** precedence  from ```[]``` operator is bigger than **t** precedence, perform a _reduce_
+2. when precedence of **last term** in **r** is bigger than **t** precedence, perform a _reduce_
+3. when precedence of **last term** in **r** is equal to **t** precedence and
+   **last term** in **r** is left associative, perform _reduce_
+4. otherwise, perform a shift.
+  
 ## Functors - advanced
 
 ### Limitations
