@@ -130,7 +130,7 @@ Names are handy to diagnose problems with the grammar. If omitted, the name will
 **Other types of terms**
 
 ```char_term``` is used when we need to match things like a ```+``` or ```,``` operator.
-```string_term``` is used when we need to match a for instance a keyword.
+```string_term``` is used when we need to match a whole string, like a language keyword.
 
 ### Nonterminal symbols
 
@@ -158,7 +158,7 @@ The ```parser``` class together with its template deduction guides allows to def
 * List of all nonterms
 * List of rules
 
-The ```parser``` object should be declared as ```constexpr```, which makes all the neccessary calculations of the table parser done in compile time.
+The ```parser``` object should be declared as ```constexpr```, which makes all the neccessary calculations of the LR(1) table parser done in compile time.
 
 
 Let's break down the arguments.
@@ -213,11 +213,11 @@ The second rule uses what's know as a left recurrence. In other words, a ```list
 **Functors**
 
 The functors are any callables that can accept the exact number of arguments as there are symbols on the right side and return a value type of the left side.
-Each of the functor arguments need to accept a value of a **value type** of the nth right side symbol.
+Each nth argument needs to accept a value of a **value type** of the nth right side symbol.
 
 So in the case of the first ```to_int``` functor, it is required to accept a value type of ```regex_term``` and return an ```int```.
 
-The second functor is a lambda which accepts 3 arguments: an ```int``` for the ```list```, a ```char``` for the ```,``` and and whatever is passed as
+The second functor is a lambda which accepts 3 arguments: an ```int``` for the ```list```, a ```char``` for the ```,``` and auto for whatever is passed as
 a value type for the ```regex_term```.
 
 >Note: Functors are called in a way that allows taking advantage of move semantics, so defining it's arguments as a move reference is encouraged.
@@ -228,7 +228,7 @@ Terms unlike nonterms (which have their value types defined as a template parame
 have their value types predefined to either a ```term_value<char>``` for a ```char_term```, and a ```term_value<std::string_view>``` 
 for both ```regex_term``` and ```string_term```.
 
-The ```term_value``` class termplate is a simple wrapper that is implicitly convertible to it's template parameter (either a ```char``` or ```std::string_view```).
+The ```term_value``` class template is a simple wrapper that is implicitly convertible to it's template parameter (either a ```char``` or ```std::string_view```).
 That's why when providing functors we can simply declare arguments as either a ```char``` or a ```std::string_view```.
 Of course an ```auto``` in case of lambda will always do the trick.
 
