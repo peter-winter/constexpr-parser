@@ -526,7 +526,37 @@ Let **r** be a rule which is a subject to reduce and **t** be a term that is enc
 3. when precedence of **last term** in **r** is equal to **t** precedence and
    **last term** in **r** is left associative, perform a _reduce_
 4. otherwise, perform a _shift_.
-  
+
+**Reduce - reduce conflicts**
+
+In some cases the language is ill formed and the parser contains a state in which there is an ambiguity between several _reduce_ actions.
+
+Consider example:
+
+```c++
+constexpr nterm<char> op("op");
+constexpr nterm<char> special_op("op");
+
+constexpr parser p(
+    op,
+    terms('!', '*', '+'),
+    nterms(special_op, op),
+    rules(
+        special_op('!'),
+        op('!'), 
+        op('*'),
+        op('+'),
+        op(special_op)
+    )
+ );
+```
+
+Let's say we parse an input ```!```. The parser has no way of telling if it should reduce using rule ```special_op('!')``` or ```op('!')```.
+
+This is an example of reduce/reduce conflict and such parser behaviour should be considered _undefined_.
+
+There is a diagnostic tool included in CTPG which detects such conflicts so they can be addressed.
+
 ## Functors - advanced
 
 Consider a parser matching white space separated names (strings).
