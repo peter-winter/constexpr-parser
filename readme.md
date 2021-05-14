@@ -750,6 +750,30 @@ constexpr parser p(
 
 ## Various features
 
+### Parse options
+
+To change the parse options simply provide a ```parse_options``` instance to the ```parse``` call:
+
+```c++
+p.parse(parse_options{}, cstring_buffer("abc"), std::cerr);
+```
+To set a particular option use on of the ```set_xxx``` methods:
+
+```c++
+p.parse(parse_options{}.set_verbose(), cstring_buffer("abc"), std::cerr);
+```
+>Note: The ```set_xxx``` methods return ```parse_options``` instance using ```*this```, so they can be chained together.
+
+The list of available parse options:
+
+* set_skip_whitespace(bool value)
+
+By default parser skips the whitespace characters between the terms, this can be changes using this option.
+
+* set_verbose(bool value)
+
+Sets the parser be verbose. More on this in the [Verbose output](#verbose-output) section.
+
 ### Verbose output
 
 To allow verbose output for debugging purposes call ```parse``` method with such arguments:
@@ -760,11 +784,9 @@ The default ```parse_options``` is appended with the ```set_verbose``` call, thu
 The last argument can be anything convertible to ```std::ostream``` referrence.
 
 The verbose output stream contains alongside usual syntax errors, the detailed process of syntax and lexical analyze.
-Both of these are described in the Diagnostic section below.
+Both of these are described in the [Diagnostics](#diagnostics) section.
 
 ### Diagnostics
-
-### Parse options
 
 ### Source tracking
 
