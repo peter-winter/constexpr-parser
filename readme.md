@@ -232,7 +232,7 @@ The ```term_value``` class template is a simple wrapper that is implicitly conve
 That's why when providing functors we can simply declare arguments as either a ```char``` or a ```std::string_view```.
 Of course an ```auto``` in case of lambda will always do the trick.
 
-The advantage of declaring functor arguments as ```term_value``` is that we can access other features (like source tracking) using the ```term_value``` methods.
+The advantage of declaring functor arguments as ```term_value``` is that we can access other features (like [source tracking](#source-tracking)) using the ```term_value``` methods.
 
 ### Parse method call
 
@@ -789,6 +789,72 @@ Both of these are described in the [Diagnostics](#diagnostics) section.
 ### Diagnostics
 
 ### Source tracking
+
+Source tracking is a feature that makes the parser keep track of **source point** (that is line and column) it is currently in.
+This feature is always available and source point information is attached to every **term value** that is passed to a functor.
+
+To use this information make the functor accept the ```term_value``` type arguments for each term.
+
+For *char_terms* the value type is ```term_value<char>```, for both *string_term* and *regtex_term* the value type is ```term_value<std::string_view```.
+Each of these types have the ```source_point``` member that can be accessed using ```get_sp()``` method.
+
+The ```source_point``` struct has a ```line``` and ```column``` public members and can be output to a stream using ```<<``` operator.
+
+This is an example of a parser that accepts a whitespace separated words and stores them in a collection together with their source points. 
+
+Take a look on the functor that utilises both value and source point of a word using ```const auto& w``` argument by calling ```get_value()``` and ```get_sp()``` respectively.
+
+```c++
+#include "ctpg.hpp"
+#include <iostream>
+
+using namespace ctpg;
+using namespace ctpg::ftors;
+using namespace ctpg::buffers;
+
+struct word_t
+{
+    std::string w;
+    source_point sp;
+};
+
+using text_t = std::vector<word_t>;
+
+auto&& add_word(text_t&& txt, std::string_view sv, source_point sp)
+{
+    txt.push_back(word_t{std::string(sv), sp});
+    return std::move(txt);
+}
+
+constexpr char word_pattern[] = "[A-Za-z]+";
+constexpr regex_term<word_pattern> word("word");
+constexpr nterm<text_t> text("text");
+
+constexpr parser p(
+    text,
+    terms(word),
+    nterms(text),
+    rules(
+        text() >= create<text_t>{},
+        text(text, word) >= [](auto&& txt, const auto& w) { return add_word(std::move(txt), w.get_value(), w.get_sp()); }
+    )
+);
+
+int main(int argc, char* argv[])
+{
+    if (argc < 2)
+        return -1;
+    auto res = p.parse(string_buffer(argv[1]), std::cout);
+    if (res.has_value())
+    {
+        for (const auto& w : res.value())
+        {
+            std::cout << w.w << " at " << w.sp << std::endl;
+        }
+    }
+    return 0;
+}
+```
 
 ### Buffers
 
