@@ -858,4 +858,27 @@ int main(int argc, char* argv[])
 
 ### Buffers
 
+There are currently two types of buffers available: ```cstring_buffer```, useful for *constexpr* parsing static array like buffer, and ```string_buffer``` for runtime parsing.
+
+It is however easy to add custom types of buffers, there are just couple of requirements for the types to be eligible as buffers.
+
+The buffer needs to expose public ```iterator``` type which should be obtainable by ```begin``` and ```end``` methods and return iterators to the start and past the end of the buffer respectively.
+
+The ```get_view``` member should return a ```std::string_view``` given two iterators, one at the start of the view and the other past the end.
+
+```c++
+iterator begin() const { return iterator{ data }; }
+iterator end() const { return iterator{ data + N - 1 }; }
+std::string_view get_view(iterator start, iterator end) const
+```
+
+The iterator type should expose following public member methods:
+
+```c++
+char operator *() const;      // derefference to a pointed char
+iterator& operator ++();      // pre and post incrementation
+iterator operator ++(int);
+bool operator == (const iterator& other) const;    // comparison operator
+```
+
 ## Regular expressions
