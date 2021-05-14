@@ -752,6 +752,16 @@ constexpr parser p(
 
 ### Verbose output
 
+To allow verbose output for debugging purposes call ```parse``` method with such arguments:
+```c++
+p.parse(parse_options{}.set_verbose(), cstring_buffer("abc"), std::cerr);
+```
+The default ```parse_options``` is appended with the ```set_verbose``` call, thus changing the verbosity option.
+The last argument can be anything convertible to ```std::ostream``` referrence.
+
+The verbose output stream contains alongside usual syntax errors, the detailed process of syntax and lexical analyze.
+Both of these are described in the Diagnostic section below.
+
 ### Diagnostics
 
 ### Parse options
