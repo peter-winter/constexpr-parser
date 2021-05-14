@@ -23,13 +23,12 @@ All it needs is a C++17 compiler!
    * [Functor helpers](#functor-helpers)
    * [Default functors](#default-functors)
 * [Various features](#various-features)
-   * [Verbose output](#verbose-output)
-   * [Diagnostics](#diagnostics)
    * [Parse options](#parse-options)
+   * [Verbose output](#verbose-output)   
    * [Source tracking](#source-tracking)
    * [Buffers](#buffers)
 * [Regular expressions](#regular-expressions)
-
+* [Diagnostics](#diagnostics)
 
 ## Usage
 Following code demonstrates a simple parser which takes a comma separated list of integer numbers as argument and prints a sum of them.
@@ -784,9 +783,8 @@ The default ```parse_options``` is appended with the ```set_verbose``` call, thu
 The last argument can be anything convertible to ```std::ostream``` referrence.
 
 The verbose output stream contains alongside usual syntax errors, the detailed process of syntax and lexical analyze.
-Both of these are described in the [Diagnostics](#diagnostics) section.
-
-### Diagnostics
+The shift and reduce actions are put to the output which is useful together with the [Diagnostics](#diagnostics) information.
+The lexical analyzer DFA actions are also printed, again useful during diagnostics.
 
 ### Source tracking
 
@@ -882,3 +880,97 @@ bool operator == (const iterator& other) const;    // comparison operator
 ```
 
 ## Regular expressions
+
+## Diagnostics
+
+To diagnose broblems in the parser use the ```write_diag_str``` method which returns a string of output with the parser state machine details:
+
+```c++
+p.write_diag_str(std::cerr)
+```
+
+The output contains 2 sections: one for syntax analyzer starting with the word **PARSER** and the other for lexical analyzer starting with **LEXICAL ANALYZER**.
+
+### Parser section
+
+```
+Parser Object size: 51576
+```
+
+First information in the secion is the size of the parser object. This may easily be couple of megabytes for some complex grammars, so consider declaring the parser as 
+a static object rather than on local stack.
+
+Next there is a state machine description in form of:
+
+```
+STATE nr
+```
+followed by description of all possible situations in which the parser is when in this state.
+Each of the situations refer to a single rule and are in form:
+
+```
+nterm <- s0 s1 s2 ... s(n) . s(n+1) ... s(rule_length) ==> lookahead_term
+```
+The *nterm* is the name of the left side nonterm, *s0*, *s1* ... are symbols from the given rule.
+
+The ```.``` after the s(n) means the parser is done matching the part of the rule before the ```.``` (all the symbols before the ```.```).
+
+The *lookahead_term* is the term expected after the whole rule is matched. Given the lookahead term after the rule is matched, the *reduce* operation is performed.
+
+After the situations there is an action list (in order: goto actions, shift actions and reduce actions):
+
+```
+On <nterm> goto <state_nr>
+...
+On <term> shift <state_nr>
+...
+On <term> reduce using (<rule_nr>)
+...
+```
+
+Goto and shift actions are basically the same, only difference is goto action refers to a nonterm and shift to a term.
+
+They both refer to the ```.``` in the situation, that is, given the symbol after the ```.``` in this state, parser goes to a new state with a <state_nr>.
+
+Reduce actions occur when the whole rule is matched, hence the reduce actions are present only when there are situations in the state with ```.``` at the end.
+What the action means is: given the <term> reduce using rule with a <rule_nr>. 
+Rules are numbered according to the apearance in the source code (in the ```rules``` call during the parser definition) starting from 0.
+
+### Conflicts
+
+Shift/reduce conflicts are denoted with lines:
+
+```
+On <term> shift to <state_nr> S/R CONFLICT, prefer reduce(<rule_nr>) over shift
+On <term> shift to <state_nr> S/R CONFLICT, prefer shift over reduce(<rule_nr>)
+```
+
+Reduce/reduce conflicts look like this:
+
+```
+On <term> R/R CONFLICT - !!! FIX IT !!!
+```
+
+### Lexical analyzer section
+
+Section contains deterministic finite automaton which corresponds to all of the terms used in a grammar.
+
+Each line denotes a single machine state:
+
+```
+STATE <nr> [recognized <term>] {<char_descr> -> <new_state>} {<char_descr> -> <new_state>}...
+```
+The ```[recognized <term>]``` part is optional and means that the DFA in this state could return the recognized term, however it is trying to match longest possible input
+so it continues consuming characters. When it reaches an error state (no new state for the character) the last recognized term is returned, or an 'unexpected character' error occurs if no term recognized so far.
+
+The ```<char_descr> -> <new_state>``` denotes the DFA transition on a character described by character description <char_descr>.
+Character descriptions are in form of a single printable character, or in case of non-printable it's hex representation like : 0x20 for space character.
+Character descriptions can also contain character range in form: ```[start-end]```.
+
+There will be unreachable states in the form:
+```
+STATE <nr> (unreachable) 
+```
+
+These are leftovers from the regular expression to DFA conversion, just ignore them.
+
