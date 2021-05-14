@@ -938,7 +938,7 @@ Rules are numbered according to the apearance in the source code (in the ```rule
 
 ### Conflicts
 
-Shift/reduce conflicts are denoted with lines:
+Shift/reduce conflicts are presented with lines:
 
 ```
 On <term> shift to <state_nr> S/R CONFLICT, prefer reduce(<rule_nr>) over shift
@@ -955,7 +955,7 @@ On <term> R/R CONFLICT - !!! FIX IT !!!
 
 Section contains deterministic finite automaton which corresponds to all of the terms used in a grammar.
 
-Each line denotes a single machine state:
+Each line represents a single machine state:
 
 ```
 STATE <nr> [recognized <term>] {<char_descr> -> <new_state>} {<char_descr> -> <new_state>}...
@@ -963,7 +963,7 @@ STATE <nr> [recognized <term>] {<char_descr> -> <new_state>} {<char_descr> -> <n
 The ```[recognized <term>]``` part is optional and means that the DFA in this state could return the recognized term, however it is trying to match longest possible input
 so it continues consuming characters. When it reaches an error state (no new state for the character) the last recognized term is returned, or an 'unexpected character' error occurs if no term recognized so far.
 
-The ```<char_descr> -> <new_state>``` denotes the DFA transition on a character described by character description <char_descr>.
+The ```<char_descr> -> <new_state>``` represents the DFA transition on a character described by character description <char_descr>.
 Character descriptions are in form of a single printable character, or in case of non-printable it's hex representation like : 0x20 for space character.
 Character descriptions can also contain character range in form: ```[start-end]```.
 
